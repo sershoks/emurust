@@ -1,8 +1,9 @@
 //! Cœur d'émulation Game Boy (DMG).
 //!
-//! État actuel : CPU complet, bus mémoire, MBC1, timer, port série et écran (PPU).
-//! Le son viendra ensuite.
+//! État actuel : CPU complet, bus mémoire, MBC1, timer, port série,
+//! écran (PPU) et son (APU).
 
+pub mod apu;
 pub mod bus;
 pub mod cartridge;
 pub mod cpu;
@@ -38,6 +39,7 @@ pub struct GameBoy {
     framebuffer: Vec<u32>,
     /// Un bit par bouton, 1 = appuyé.
     buttons: u8,
+    sample_rate: u32,
 }
 
 impl GameBoy {
@@ -47,6 +49,7 @@ impl GameBoy {
             bus: None,
             framebuffer: vec![DMG_PALETTE[0]; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize],
             buttons: 0,
+            sample_rate: 48_000,
         }
     }
 
@@ -107,7 +110,9 @@ impl Emulator for GameBoy {
     fn reset(&mut self) {
         self.cpu = Cpu::post_boot_dmg();
         if let Some(bus) = self.bus.take() {
-            self.bus = Some(GbBus::new(bus.cartridge));
+            let mut bus = GbBus::new(bus.cartridge);
+            bus.apu.set_sample_rate(self.sample_rate);
+            self.bus = Some(bus);
         }
         self.framebuffer.fill(DMG_PALETTE[0]);
         self.buttons = 0;
@@ -128,6 +133,19 @@ impl Emulator for GameBoy {
         match &self.bus {
             Some(bus) => bus.ppu.frame(),
             None => &self.framebuffer,
+        }
+    }
+
+    fn set_sample_rate(&mut self, rate: u32) {
+        self.sample_rate = rate;
+        if let Some(bus) = self.bus.as_mut() {
+            bus.apu.set_sample_rate(rate);
+        }
+    }
+
+    fn drain_audio(&mut self, out: &mut Vec<f32>) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.apu.drain_samples(out);
         }
     }
 

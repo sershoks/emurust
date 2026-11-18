@@ -3,8 +3,13 @@
 //! Sans argument, il liste les systèmes disponibles.
 //! Avec un fichier ROM, il choisit l'émulateur et ouvre une fenêtre de jeu.
 
+mod audio;
+
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
+
+use audio::AudioOutput;
 
 use emu_core::{Button, Emulator, SystemInfo};
 use gb_core::GameBoy;
@@ -107,17 +112,47 @@ fn run_window(emu: &mut dyn Emulator, title: &str) -> Result<(), minifb::Error> 
             ..WindowOptions::default()
         },
     )?;
-    window.set_target_fps(info.frame_rate.round() as usize);
+    let audio = AudioOutput::open();
+    match &audio {
+        Some(out) => {
+            emu.set_sample_rate(out.sample_rate);
+            // C'est la carte son qui donne le rythme : pas de limite côté fenêtre.
+            window.set_target_fps(0);
+        }
+        None => {
+            eprintln!("Aucune sortie audio trouvée : le jeu tournera sans son.");
+            window.set_target_fps(info.frame_rate.round() as usize);
+        }
+    }
+    // On garde environ 50 ms de son d'avance : assez pour éviter les coupures,
+    // assez peu pour que le son reste synchronisé avec l'image.
+    let max_queued = audio
+        .as_ref()
+        .map_or(0, |out| out.sample_rate as usize / 20);
 
     println!(
         "Flèches : croix | X : A | Z : B | Entrée : Start | Retour arrière : Select | Échap : quitter"
     );
 
+    let mut samples = Vec::new();
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        if let Some(out) = &audio {
+            while out.queued_frames() > max_queued {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
         for (key, button) in KEYMAP {
             emu.set_button(button, window.is_key_down(key));
         }
         emu.run_frame();
+
+        samples.clear();
+        emu.drain_audio(&mut samples);
+        if let Some(out) = &audio {
+            out.push(&samples);
+        }
+
         window.update_with_buffer(emu.framebuffer(), width, height)?;
     }
     Ok(())

@@ -1,5 +1,5 @@
 //! Bus mémoire de la Game Boy : relie le CPU à la cartouche, à la RAM
-//! et aux registres matériels (timer, port série, manette...).
+//! et aux registres matériels (timer, port série, manette, écran, son...).
 //!
 //! Carte mémoire :
 //! - `0000-7FFF` ROM de cartouche
@@ -11,6 +11,7 @@
 //! - `FF80-FFFE` HRAM
 //! - `FFFF`      IE (interruptions activées)
 
+use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::cpu::Bus;
 use crate::ppu::Ppu;
@@ -36,6 +37,7 @@ pub struct GbBus {
     tac: u8,
 
     pub ppu: Ppu,
+    pub apu: Apu,
 
     /// Boutons appuyés, un bit par bouton (voir `GameBoy::button_bit`).
     pub buttons: u8,
@@ -60,6 +62,7 @@ impl GbBus {
             tma: 0,
             tac: 0,
             ppu: Ppu::new(),
+            apu: Apu::new(),
             buttons: 0,
             serial_output: Vec::new(),
         }
@@ -120,6 +123,7 @@ impl GbBus {
             0xFF06 => self.tma,
             0xFF07 => self.tac | 0xF8,
             0xFF0F => self.if_ | 0xE0,
+            0xFF10..=0xFF3F => self.apu.read(addr),
             0xFF40..=0xFF45 | 0xFF47..=0xFF4B => self.ppu.read_reg(addr),
             _ => self.io[(addr - 0xFF00) as usize],
         }
@@ -140,6 +144,7 @@ impl GbBus {
             0xFF06 => self.tma = value,
             0xFF07 => self.tac = value & 0x07,
             0xFF0F => self.if_ = value & 0x1F,
+            0xFF10..=0xFF3F => self.apu.write(addr, value),
             0xFF46 => self.oam_dma(value),
             0xFF40..=0xFF45 | 0xFF47..=0xFF4B => self.ppu.write_reg(addr, value),
             _ => self.io[(addr - 0xFF00) as usize] = value,
@@ -178,6 +183,7 @@ impl Bus for GbBus {
 
     fn tick(&mut self) {
         self.tick_timer();
+        self.apu.tick();
         let irq = self.ppu.tick();
         self.request_interrupt(irq);
     }

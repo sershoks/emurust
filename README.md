@@ -9,7 +9,7 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
   - [x] CPU SM83 (tous les opcodes, timing au cycle près)
   - [x] Bus mémoire, MBC1, timer, port série
   - [x] PPU (fond, fenêtre, sprites, interruptions STAT)
-  - [ ] Son (APU)
+  - [x] Son (APU : 2 canaux carrés, onde, bruit, stéréo)
   - [ ] MBC3 / MBC5
 - [ ] ... (les suivants viendront un par un)
 

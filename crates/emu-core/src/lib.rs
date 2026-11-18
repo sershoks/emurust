@@ -74,6 +74,14 @@ pub trait Emulator {
     /// ligne par ligne, de taille `screen_width * screen_height`.
     fn framebuffer(&self) -> &[u32];
 
+    /// Fréquence d'échantillonnage voulue pour le son, en Hz.
+    fn set_sample_rate(&mut self, _rate: u32) {}
+
+    /// Ajoute à `out` les échantillons produits depuis le dernier appel :
+    /// stéréo entrelacé (gauche, droite), valeurs entre -1,0 et 1,0.
+    /// Par défaut, un émulateur ne produit aucun son.
+    fn drain_audio(&mut self, _out: &mut Vec<f32>) {}
+
     /// Indique si un bouton est appuyé ou relâché.
     fn set_button(&mut self, button: Button, pressed: bool);
 }

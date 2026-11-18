@@ -11,6 +11,7 @@ name = "emurust"
 path = "src/main.rs"
 
 [dependencies]
+cpal = "0.18"
 emu-core.workspace = true
 gb-core.workspace = true
 minifb = "0.29"
