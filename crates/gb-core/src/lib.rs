@@ -136,6 +136,17 @@ impl Emulator for GameBoy {
         }
     }
 
+    fn save_data(&self) -> Option<Vec<u8>> {
+        self.bus.as_ref()?.cartridge.save_data()
+    }
+
+    fn load_save_data(&mut self, data: &[u8]) -> Result<(), EmuError> {
+        match self.bus.as_mut() {
+            Some(bus) => bus.cartridge.load_save_data(data),
+            None => Ok(()),
+        }
+    }
+
     fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = rate;
         if let Some(bus) = self.bus.as_mut() {

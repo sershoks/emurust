@@ -11,7 +11,7 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
   - [x] PPU (fond, fenêtre, sprites, interruptions STAT)
   - [x] Son (APU : 2 canaux carrés, onde, bruit, stéréo)
   - [x] Cartouches MBC1, MBC3 (avec horloge RTC) et MBC5
-  - [ ] Sauvegardes (.sav)
+  - [x] Sauvegardes (.sav compatibles avec les autres émulateurs, horloge MBC3 incluse)
 - [ ] ... (les suivants viendront un par un)
 
 ## Légal

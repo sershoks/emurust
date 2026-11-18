@@ -25,6 +25,7 @@ bios/
 
 # --- Sauvegardes de jeux / états ---
 *.sav
+*.sav.tmp
 *.srm
 *.state
 

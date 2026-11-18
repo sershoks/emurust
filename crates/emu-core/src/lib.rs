@@ -43,6 +43,8 @@ pub enum EmuError {
     InvalidRom(String),
     /// La ROM utilise une fonctionnalité pas encore émulée.
     Unsupported(String),
+    /// Le fichier de sauvegarde ne correspond pas à ce jeu.
+    InvalidSave(String),
 }
 
 impl fmt::Display for EmuError {
@@ -50,6 +52,7 @@ impl fmt::Display for EmuError {
         match self {
             EmuError::InvalidRom(msg) => write!(f, "ROM invalide : {msg}"),
             EmuError::Unsupported(msg) => write!(f, "non supporté : {msg}"),
+            EmuError::InvalidSave(msg) => write!(f, "sauvegarde invalide : {msg}"),
         }
     }
 }
@@ -73,6 +76,17 @@ pub trait Emulator {
     /// Image courante, un pixel par `u32` au format `0x00RRGGBB`,
     /// ligne par ligne, de taille `screen_width * screen_height`.
     fn framebuffer(&self) -> &[u32];
+
+    /// Contenu à écrire dans le fichier de sauvegarde (`.sav`), ou `None`
+    /// si le jeu n'a rien à sauvegarder (cartouche sans pile).
+    fn save_data(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Recharge une sauvegarde produite par [`Emulator::save_data`].
+    fn load_save_data(&mut self, _data: &[u8]) -> Result<(), EmuError> {
+        Ok(())
+    }
 
     /// Fréquence d'échantillonnage voulue pour le son, en Hz.
     fn set_sample_rate(&mut self, _rate: u32) {}
