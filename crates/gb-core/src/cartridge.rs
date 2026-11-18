@@ -1,4 +1,5 @@
-//! Lecture de l'en-tête des cartouches Game Boy (octets 0x0100 à 0x014F).
+//! Cartouches Game Boy : lecture de l'en-tête (octets 0x0100 à 0x014F)
+//! et contrôleurs de banques (MBC1, MBC3 avec horloge, MBC5).
 //!
 //! Le logo présent à 0x0104 n'est volontairement ni vérifié ni stocké :
 //! l'émulateur n'en a pas besoin et ce projet n'embarque aucune donnée protégée.
@@ -49,6 +50,82 @@ pub struct Header {
     pub checksum_ok: bool,
 }
 
+/// Horloge temps réel (RTC) des cartouches MBC3.
+///
+/// Elle avance avec le temps émulé : une seconde toutes les 4 194 304 T-cycles.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rtc {
+    pub seconds: u8,
+    pub minutes: u8,
+    pub hours: u8,
+    /// Jours, sur 9 bits.
+    pub days: u16,
+    /// Horloge en pause (bit 6 de DH).
+    pub halted: bool,
+    /// Le compteur de jours a dépassé 511 (bit 7 de DH).
+    pub day_carry: bool,
+}
+
+impl Rtc {
+    fn read(&self, reg: u8) -> u8 {
+        match reg {
+            0x08 => self.seconds,
+            0x09 => self.minutes,
+            0x0A => self.hours,
+            0x0B => self.days as u8,
+            _ => {
+                ((self.days >> 8) as u8 & 0x01)
+                    | (self.halted as u8) << 6
+                    | (self.day_carry as u8) << 7
+            }
+        }
+    }
+
+    fn write(&mut self, reg: u8, value: u8) {
+        match reg {
+            0x08 => self.seconds = value & 0x3F,
+            0x09 => self.minutes = value & 0x3F,
+            0x0A => self.hours = value & 0x1F,
+            0x0B => self.days = (self.days & 0x100) | value as u16,
+            _ => {
+                self.days = (self.days & 0xFF) | ((value as u16 & 0x01) << 8);
+                self.halted = value & 0x40 != 0;
+                self.day_carry = value & 0x80 != 0;
+            }
+        }
+    }
+
+    fn advance_second(&mut self) {
+        if self.halted {
+            return;
+        }
+        // Comme sur le vrai circuit, on compare à la valeur exacte : une valeur
+        // hors limites écrite par le jeu continue de compter jusqu'au débordement.
+        self.seconds = (self.seconds + 1) & 0x3F;
+        if self.seconds != 60 {
+            return;
+        }
+        self.seconds = 0;
+        self.minutes = (self.minutes + 1) & 0x3F;
+        if self.minutes != 60 {
+            return;
+        }
+        self.minutes = 0;
+        self.hours = (self.hours + 1) & 0x1F;
+        if self.hours != 24 {
+            return;
+        }
+        self.hours = 0;
+        self.days += 1;
+        if self.days > 0x1FF {
+            self.days = 0;
+            self.day_carry = true;
+        }
+    }
+}
+
+const CYCLES_PER_SECOND: u32 = 4_194_304;
+
 /// Une cartouche chargée en mémoire, avec l'état de son contrôleur de banques.
 #[derive(Debug, Clone)]
 pub struct Cartridge {
@@ -57,64 +134,124 @@ pub struct Cartridge {
     /// RAM de sauvegarde présente sur la cartouche (vide si aucune).
     pub ram: Vec<u8>,
     ram_enabled: bool,
-    /// MBC1 : 5 bits bas du numéro de banque ROM (jamais 0).
-    bank_lo: u8,
-    /// MBC1 : 2 bits hauts, banque ROM haute ou banque RAM selon le mode.
-    bank_hi: u8,
+    /// Banque ROM visible en 0x4000-0x7FFF.
+    /// MBC1 : 5 bits, MBC3 : 7 bits, MBC5 : 9 bits.
+    rom_bank: u16,
+    /// MBC1 : 2 bits hauts (banque ROM haute ou banque RAM selon le mode).
+    /// MBC3 : banque RAM (0-3) ou registre RTC (0x08-0x0C).
+    /// MBC5 : banque RAM (0-15).
+    ram_bank: u8,
     /// MBC1 : mode de banking avancé.
     mode: bool,
+    /// MBC3 : horloge qui tourne, et copie figée que lit le jeu.
+    pub rtc: Rtc,
+    rtc_latched: Rtc,
+    /// MBC3 : le verrouillage se fait en écrivant 0x00 puis 0x01.
+    latch_ready: bool,
+    rtc_cycles: u32,
 }
 
 impl Cartridge {
-    /// Lit dans la zone ROM (0x0000-0x7FFF).
-    pub fn read_rom(&self, addr: u16) -> u8 {
-        let bank = match (self.header.mbc, addr) {
-            (Mbc::Mbc1, 0x0000..=0x3FFF) if self.mode => (self.bank_hi as usize) << 5,
-            (Mbc::Mbc1, 0x4000..=0x7FFF) => ((self.bank_hi as usize) << 5) | self.bank_lo as usize,
-            (_, 0x0000..=0x3FFF) => 0,
-            _ => 1,
-        };
-        let offset = bank * 0x4000 + (addr as usize & 0x3FFF);
+    fn rom_byte(&self, bank: usize, addr: u16) -> u8 {
         if self.rom.is_empty() {
             return 0xFF;
         }
+        let offset = bank * 0x4000 + (addr as usize & 0x3FFF);
         self.rom[offset % self.rom.len()]
+    }
+
+    /// Lit dans la zone ROM (0x0000-0x7FFF).
+    pub fn read_rom(&self, addr: u16) -> u8 {
+        let low_area = addr < 0x4000;
+        let bank = match self.header.mbc {
+            Mbc::Mbc1 if low_area && self.mode => (self.ram_bank as usize) << 5,
+            Mbc::Mbc1 if !low_area => ((self.ram_bank as usize) << 5) | self.rom_bank as usize,
+            Mbc::Mbc3 | Mbc::Mbc5 if !low_area => self.rom_bank as usize,
+            _ if low_area => 0,
+            _ => 1,
+        };
+        self.rom_byte(bank, addr)
     }
 
     /// Écriture dans la zone ROM : sert à piloter le contrôleur de banques.
     pub fn write_rom(&mut self, addr: u16, value: u8) {
-        if self.header.mbc != Mbc::Mbc1 {
-            return;
-        }
-        match addr {
-            0x0000..=0x1FFF => self.ram_enabled = value & 0x0F == 0x0A,
-            0x2000..=0x3FFF => self.bank_lo = (value & 0x1F).max(1),
-            0x4000..=0x5FFF => self.bank_hi = value & 0x03,
-            _ => self.mode = value & 0x01 != 0,
+        match (self.header.mbc, addr) {
+            (Mbc::Mbc1 | Mbc::Mbc3 | Mbc::Mbc5, 0x0000..=0x1FFF) => {
+                self.ram_enabled = value & 0x0F == 0x0A;
+            }
+
+            (Mbc::Mbc1, 0x2000..=0x3FFF) => self.rom_bank = (value as u16 & 0x1F).max(1),
+            (Mbc::Mbc1, 0x4000..=0x5FFF) => self.ram_bank = value & 0x03,
+            (Mbc::Mbc1, _) => self.mode = value & 0x01 != 0,
+
+            (Mbc::Mbc3, 0x2000..=0x3FFF) => self.rom_bank = (value as u16 & 0x7F).max(1),
+            (Mbc::Mbc3, 0x4000..=0x5FFF) => self.ram_bank = value,
+            (Mbc::Mbc3, _) => {
+                if self.latch_ready && value == 0x01 {
+                    self.rtc_latched = self.rtc.clone();
+                }
+                self.latch_ready = value == 0x00;
+            }
+
+            // Sur MBC5, la banque 0 peut aussi être placée en 0x4000.
+            (Mbc::Mbc5, 0x2000..=0x2FFF) => self.rom_bank = (self.rom_bank & 0x100) | value as u16,
+            (Mbc::Mbc5, 0x3000..=0x3FFF) => {
+                self.rom_bank = (self.rom_bank & 0xFF) | ((value as u16 & 0x01) << 8);
+            }
+            (Mbc::Mbc5, 0x4000..=0x5FFF) => self.ram_bank = value & 0x0F,
+
+            _ => {}
         }
     }
 
     fn ram_offset(&self, addr: u16) -> Option<usize> {
-        if self.ram.is_empty() || (self.header.mbc == Mbc::Mbc1 && !self.ram_enabled) {
+        let needs_enable = matches!(self.header.mbc, Mbc::Mbc1 | Mbc::Mbc3 | Mbc::Mbc5);
+        if self.ram.is_empty() || (needs_enable && !self.ram_enabled) {
             return None;
         }
-        let bank = if self.header.mbc == Mbc::Mbc1 && self.mode {
-            self.bank_hi as usize
-        } else {
-            0
+        let bank = match self.header.mbc {
+            Mbc::Mbc1 if self.mode => self.ram_bank as usize,
+            Mbc::Mbc3 if self.ram_bank <= 0x03 => self.ram_bank as usize,
+            Mbc::Mbc3 => return None, // un registre RTC est sélectionné
+            Mbc::Mbc5 => self.ram_bank as usize,
+            _ => 0,
         };
         Some((bank * 0x2000 + (addr as usize & 0x1FFF)) % self.ram.len())
     }
 
+    fn rtc_selected(&self) -> bool {
+        self.header.mbc == Mbc::Mbc3 && self.ram_enabled && (0x08..=0x0C).contains(&self.ram_bank)
+    }
+
     /// Lit dans la RAM de cartouche (0xA000-0xBFFF).
     pub fn read_ram(&self, addr: u16) -> u8 {
+        if self.rtc_selected() {
+            return self.rtc_latched.read(self.ram_bank);
+        }
         self.ram_offset(addr).map_or(0xFF, |i| self.ram[i])
     }
 
     /// Écrit dans la RAM de cartouche (0xA000-0xBFFF).
     pub fn write_ram(&mut self, addr: u16, value: u8) {
+        if self.rtc_selected() {
+            self.rtc.write(self.ram_bank, value);
+            self.rtc_cycles = 0;
+            return;
+        }
         if let Some(i) = self.ram_offset(addr) {
             self.ram[i] = value;
+        }
+    }
+
+    /// Avance d'un M-cycle (4 T-cycles) : fait tourner l'horloge des MBC3.
+    pub fn tick(&mut self) {
+        if self.header.mbc != Mbc::Mbc3 {
+            return;
+        }
+        self.rtc_cycles += 4;
+        if self.rtc_cycles >= CYCLES_PER_SECOND {
+            self.rtc_cycles -= CYCLES_PER_SECOND;
+            self.rtc.advance_second();
         }
     }
 
@@ -180,9 +317,13 @@ impl Cartridge {
             header,
             rom: data.to_vec(),
             ram_enabled: false,
-            bank_lo: 1,
-            bank_hi: 0,
+            rom_bank: 1,
+            ram_bank: 0,
             mode: false,
+            rtc: Rtc::default(),
+            rtc_latched: Rtc::default(),
+            latch_ready: false,
+            rtc_cycles: 0,
         })
     }
 }
@@ -253,6 +394,110 @@ pub(crate) mod tests {
         cart.write_rom(0x0000, 0x0A);
         cart.write_ram(0xA000, 0x42);
         assert_eq!(cart.read_ram(0xA000), 0x42);
+    }
+
+    /// ROM factice de `banks` banques ; chaque banque contient son numéro en 0x0001-0x0002.
+    fn banked_rom(cart_type: u8, rom_code: u8, banks: usize) -> Vec<u8> {
+        let mut rom = vec![0u8; banks * 0x4000];
+        rom[CART_TYPE] = cart_type;
+        rom[ROM_SIZE] = rom_code;
+        for bank in 0..banks {
+            rom[bank * 0x4000 + 1] = bank as u8;
+            rom[bank * 0x4000 + 2] = (bank >> 8) as u8;
+        }
+        rom
+    }
+
+    fn bank_at_4000(cart: &Cartridge) -> usize {
+        cart.read_rom(0x4001) as usize | (cart.read_rom(0x4002) as usize) << 8
+    }
+
+    #[test]
+    fn mbc3_switches_rom_and_ram_banks() {
+        let mut rom = banked_rom(0x13, 0x06, 128);
+        rom[RAM_SIZE] = 0x03; // 32 Kio = 4 banques
+        let mut cart = Cartridge::from_bytes(&rom).unwrap();
+        cart.write_rom(0x2000, 0x7F);
+        assert_eq!(bank_at_4000(&cart), 127);
+        cart.write_rom(0x2000, 0x00);
+        assert_eq!(bank_at_4000(&cart), 1);
+
+        cart.write_rom(0x0000, 0x0A);
+        cart.write_rom(0x4000, 0x02);
+        cart.write_ram(0xA000, 0x22);
+        cart.write_rom(0x4000, 0x00);
+        assert_eq!(cart.read_ram(0xA000), 0x00);
+        cart.write_rom(0x4000, 0x02);
+        assert_eq!(cart.read_ram(0xA000), 0x22);
+    }
+
+    #[test]
+    fn mbc3_rtc_counts_and_latches() {
+        let mut cart = Cartridge::from_bytes(&banked_rom(0x10, 0x00, 2)).unwrap();
+        cart.write_rom(0x0000, 0x0A);
+        for _ in 0..(CYCLES_PER_SECOND / 4) * 3 {
+            cart.tick();
+        }
+        cart.write_rom(0x4000, 0x08); // registre des secondes
+        assert_eq!(
+            cart.read_ram(0xA000),
+            0,
+            "rien n'est visible avant le verrouillage"
+        );
+
+        cart.write_rom(0x6000, 0x00);
+        cart.write_rom(0x6000, 0x01);
+        assert_eq!(cart.read_ram(0xA000), 3);
+
+        // La valeur reste figée tant qu'on ne verrouille pas à nouveau.
+        for _ in 0..CYCLES_PER_SECOND / 4 {
+            cart.tick();
+        }
+        assert_eq!(cart.read_ram(0xA000), 3);
+    }
+
+    #[test]
+    fn rtc_rolls_over_into_days() {
+        let mut rtc = Rtc {
+            seconds: 59,
+            minutes: 59,
+            hours: 23,
+            days: 0x1FF,
+            ..Rtc::default()
+        };
+        rtc.advance_second();
+        assert_eq!(
+            (rtc.seconds, rtc.minutes, rtc.hours, rtc.days),
+            (0, 0, 0, 0)
+        );
+        assert!(rtc.day_carry);
+
+        rtc.halted = true;
+        rtc.advance_second();
+        assert_eq!(rtc.seconds, 0);
+    }
+
+    #[test]
+    fn mbc5_uses_9_bit_rom_bank() {
+        let mut cart = Cartridge::from_bytes(&banked_rom(0x19, 0x08, 512)).unwrap();
+        cart.write_rom(0x2000, 0x2A);
+        cart.write_rom(0x3000, 0x01);
+        assert_eq!(bank_at_4000(&cart), 0x12A);
+        // La banque 0 est autorisée en zone haute.
+        cart.write_rom(0x2000, 0x00);
+        cart.write_rom(0x3000, 0x00);
+        assert_eq!(bank_at_4000(&cart), 0);
+    }
+
+    #[test]
+    fn mbc5_switches_ram_banks() {
+        let mut rom = banked_rom(0x1B, 0x00, 2);
+        rom[RAM_SIZE] = 0x04; // 128 Kio = 16 banques
+        let mut cart = Cartridge::from_bytes(&rom).unwrap();
+        cart.write_rom(0x0000, 0x0A);
+        cart.write_rom(0x4000, 0x0F);
+        cart.write_ram(0xBFFF, 0x55);
+        assert_eq!(cart.ram[15 * 0x2000 + 0x1FFF], 0x55);
     }
 
     #[test]

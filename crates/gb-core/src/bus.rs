@@ -183,6 +183,7 @@ impl Bus for GbBus {
 
     fn tick(&mut self) {
         self.tick_timer();
+        self.cartridge.tick();
         self.apu.tick();
         let irq = self.ppu.tick();
         self.request_interrupt(irq);

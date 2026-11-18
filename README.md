@@ -7,10 +7,11 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
 - [ ] Launcher (fenêtre de jeu en place, menu à venir)
 - [ ] Game Boy (DMG)
   - [x] CPU SM83 (tous les opcodes, timing au cycle près)
-  - [x] Bus mémoire, MBC1, timer, port série
+  - [x] Bus mémoire, timer, port série
   - [x] PPU (fond, fenêtre, sprites, interruptions STAT)
   - [x] Son (APU : 2 canaux carrés, onde, bruit, stéréo)
-  - [ ] MBC3 / MBC5
+  - [x] Cartouches MBC1, MBC3 (avec horloge RTC) et MBC5
+  - [ ] Sauvegardes (.sav)
 - [ ] ... (les suivants viendront un par un)
 
 ## Légal

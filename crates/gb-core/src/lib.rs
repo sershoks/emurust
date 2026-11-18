@@ -1,6 +1,6 @@
 //! Cœur d'émulation Game Boy (DMG).
 //!
-//! État actuel : CPU complet, bus mémoire, MBC1, timer, port série,
+//! État actuel : CPU complet, bus mémoire, MBC1/MBC3/MBC5, timer, port série,
 //! écran (PPU) et son (APU).
 
 pub mod apu;
@@ -95,7 +95,7 @@ impl Emulator for GameBoy {
     fn load_rom(&mut self, data: &[u8]) -> Result<(), EmuError> {
         let cartridge = Cartridge::from_bytes(data)?;
         match cartridge.header.mbc {
-            Mbc::RomOnly | Mbc::Mbc1 => {}
+            Mbc::RomOnly | Mbc::Mbc1 | Mbc::Mbc3 | Mbc::Mbc5 => {}
             other => {
                 return Err(EmuError::Unsupported(format!(
                     "contrôleur de cartouche {other:?} pas encore émulé"
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn unsupported_mbc_is_rejected() {
         let mut gb = GameBoy::new();
-        let err = gb.load_rom(&fake_rom("MBC5", 0x19)).unwrap_err();
+        let err = gb.load_rom(&fake_rom("MBC2", 0x05)).unwrap_err();
         assert!(matches!(err, EmuError::Unsupported(_)));
     }
 
