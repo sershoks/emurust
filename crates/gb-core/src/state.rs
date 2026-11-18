@@ -12,7 +12,7 @@ use crate::cpu::Cpu;
 
 const MAGIC: &[u8; 8] = b"EMURGBST";
 /// À augmenter dès que le contenu de l'état change de forme.
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const PREFIX_LEN: usize = MAGIC.len() + 2;
 
 /// Identifie le jeu : titre de l'en-tête et sommes de contrôle (0x014D-0x014F).

@@ -39,14 +39,24 @@ impl System {
 }
 
 pub fn all() -> Vec<System> {
-    vec![System {
-        info: GameBoy::new().info(),
-        create: || Box::new(GameBoy::new()),
-        details: game_boy_details,
-        accent: Color32::from_rgb(120, 255, 140),
-        screen: Color32::from_rgb(150, 190, 60),
-        tagline: "Console portable · 1989",
-    }]
+    vec![
+        System {
+            info: GameBoy::new().info(),
+            create: || Box::new(GameBoy::new()),
+            details: game_boy_details,
+            accent: Color32::from_rgb(120, 255, 140),
+            screen: Color32::from_rgb(150, 190, 60),
+            tagline: "Console portable · 1989",
+        },
+        System {
+            info: GameBoy::color().info(),
+            create: || Box::new(GameBoy::color()),
+            details: game_boy_details,
+            accent: Color32::from_rgb(190, 120, 255),
+            screen: Color32::from_rgb(90, 200, 230),
+            tagline: "Console portable couleur · 1998",
+        },
+    ]
 }
 
 /// Indice du système qui sait lancer ce fichier.
@@ -95,7 +105,9 @@ fn game_boy_details(data: &[u8]) -> Vec<(String, String)> {
             _ => "non".into(),
         },
     ));
-    if h.cgb_support {
+    if h.cgb_only {
+        rows.push(("Couleur".into(), "exclusif Game Boy Color".into()));
+    } else if h.cgb_support {
         rows.push(("Couleur".into(), "compatible Game Boy Color".into()));
     }
     rows
@@ -110,6 +122,9 @@ mod tests {
         let systems = all();
         assert_eq!(for_path(&systems, Path::new("jeu.gb")), Some(0));
         assert_eq!(for_path(&systems, Path::new("JEU.GB")), Some(0));
+        assert_eq!(for_path(&systems, Path::new("couleur.gbc")), Some(1));
+        // La Color accepte aussi les anciennes cartouches dans son dossier.
+        assert!(systems[1].accepts(Path::new("ancien.gb")));
         assert_eq!(for_path(&systems, Path::new("jeu.txt")), None);
         assert_eq!(for_path(&systems, Path::new("sans_extension")), None);
     }

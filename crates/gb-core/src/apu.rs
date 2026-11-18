@@ -516,15 +516,16 @@ impl Apu {
         self.sequencer_step = (step + 1) & 7;
     }
 
-    /// Avance d'un M-cycle (4 T-cycles).
-    pub fn tick(&mut self) {
+    /// Avance de `cycles` T-cycles de temps réel (4 par M-cycle, 2 en double vitesse).
+    pub fn tick(&mut self, cycles: u32) {
         if self.powered {
-            self.ch1.step(4);
-            self.ch2.step(4);
-            self.ch3.step(4);
-            self.ch4.step(4);
+            let c = cycles as i32;
+            self.ch1.step(c);
+            self.ch2.step(c);
+            self.ch3.step(c);
+            self.ch4.step(c);
 
-            self.sequencer_timer -= 4;
+            self.sequencer_timer -= cycles;
             if self.sequencer_timer == 0 {
                 self.sequencer_timer = FRAME_SEQUENCER_PERIOD;
                 self.clock_sequencer();
@@ -536,7 +537,7 @@ impl Apu {
         self.sum_right += right;
         self.sum_count += 1;
 
-        self.sample_clock += 4 * self.sample_rate;
+        self.sample_clock += cycles as u64 * self.sample_rate;
         if self.sample_clock >= CPU_HZ {
             self.sample_clock -= CPU_HZ;
             self.push_sample();
@@ -614,7 +615,7 @@ mod tests {
 
     fn run_cycles(apu: &mut Apu, t_cycles: u32) {
         for _ in 0..t_cycles / 4 {
-            apu.tick();
+            apu.tick(4);
         }
     }
 

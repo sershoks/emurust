@@ -8,6 +8,10 @@
 //! Après 144 lignes visibles viennent 10 lignes de VBlank (mode 1).
 //! Le rendu est fait ligne par ligne au début du HBlank, ce qui suffit
 //! pour la très grande majorité des jeux.
+//!
+//! En mode Game Boy Color, la VRAM a deux banques, chaque tuile du fond a
+//! des attributs (palette, banque, miroirs, priorité) et les couleurs viennent
+//! de 8 + 8 palettes de 4 couleurs sur 15 bits.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,8 +41,21 @@ const LCDC_LCD_ON: u8 = 0x80;
 
 #[derive(Serialize, Deserialize)]
 pub struct Ppu {
+    /// Deux banques de 8 Kio (la seconde n'existe qu'en mode Color).
     pub vram: Vec<u8>,
     pub oam: Vec<u8>,
+    /// Mode Game Boy Color.
+    pub cgb: bool,
+    /// Banque VRAM visible par le CPU (registre VBK).
+    vram_bank: u8,
+    /// Palettes Color : 8 palettes × 4 couleurs × 2 octets (RGB 15 bits).
+    bg_palettes: Vec<u8>,
+    obj_palettes: Vec<u8>,
+    /// Index d'écriture dans les palettes (BCPS / OCPS), bit 7 = auto-incrément.
+    bcps: u8,
+    ocps: u8,
+    /// Passe à `true` au début de chaque HBlank (utilisé par la HDMA).
+    hblank_started: bool,
 
     lcdc: u8,
     /// Seuls les bits 3 à 6 (sources d'interruption STAT) sont stockés.
@@ -68,10 +85,23 @@ pub struct Ppu {
 
 impl Ppu {
     pub fn new() -> Self {
-        let blank = vec![DMG_PALETTE[0]; SCREEN_WIDTH * SCREEN_HEIGHT];
+        Self::with_mode(false)
+    }
+
+    pub fn with_mode(cgb: bool) -> Self {
+        let blank_color = if cgb { 0x00FF_FFFF } else { DMG_PALETTE[0] };
+        let blank = vec![blank_color; SCREEN_WIDTH * SCREEN_HEIGHT];
         Ppu {
-            vram: vec![0; 0x2000],
+            vram: vec![0; 0x4000],
             oam: vec![0; 0xA0],
+            cgb,
+            vram_bank: 0,
+            // Toutes les couleurs démarrent en blanc (0x7FFF).
+            bg_palettes: vec![0xFF; 64],
+            obj_palettes: vec![0xFF; 64],
+            bcps: 0,
+            ocps: 0,
+            hblank_started: false,
             // Valeurs laissées par la boot ROM.
             lcdc: 0x91,
             stat: 0,
@@ -102,6 +132,40 @@ impl Ppu {
         self.lcdc & LCDC_LCD_ON != 0
     }
 
+    fn blank_color(&self) -> u32 {
+        if self.cgb {
+            0x00FF_FFFF
+        } else {
+            DMG_PALETTE[0]
+        }
+    }
+
+    /// Lecture CPU dans 0x8000-0x9FFF, dans la banque sélectionnée.
+    pub fn read_vram(&self, addr: u16) -> u8 {
+        self.vram[self.vram_bank as usize * 0x2000 + (addr as usize & 0x1FFF)]
+    }
+
+    pub fn write_vram(&mut self, addr: u16, value: u8) {
+        self.vram[self.vram_bank as usize * 0x2000 + (addr as usize & 0x1FFF)] = value;
+    }
+
+    /// Indique (une seule fois) qu'un HBlank vient de commencer.
+    pub fn take_hblank(&mut self) -> bool {
+        std::mem::take(&mut self.hblank_started)
+    }
+
+    /// Couleur `color` (0-3) de la palette Color `palette` (0-7), en 0x00RRGGBB.
+    fn cgb_color(palettes: &[u8], palette: u8, color: u8) -> u32 {
+        let i = palette as usize * 8 + color as usize * 2;
+        let rgb555 = u16::from_le_bytes([palettes[i], palettes[i + 1]]);
+        // 5 bits → 8 bits, en recopiant les bits hauts dans les bits bas.
+        let expand = |c: u16| {
+            let c = (c & 0x1F) as u32;
+            (c << 3) | (c >> 2)
+        };
+        expand(rgb555) << 16 | expand(rgb555 >> 5) << 8 | expand(rgb555 >> 10)
+    }
+
     pub fn read_reg(&self, addr: u16) -> u8 {
         match addr {
             0xFF40 => self.lcdc,
@@ -119,6 +183,11 @@ impl Ppu {
             0xFF49 => self.obp1,
             0xFF4A => self.wy,
             0xFF4B => self.wx,
+            0xFF4F if self.cgb => 0xFE | self.vram_bank,
+            0xFF68 if self.cgb => self.bcps | 0x40,
+            0xFF69 if self.cgb => self.bg_palettes[(self.bcps & 0x3F) as usize],
+            0xFF6A if self.cgb => self.ocps | 0x40,
+            0xFF6B if self.cgb => self.obj_palettes[(self.ocps & 0x3F) as usize],
             _ => 0xFF,
         }
     }
@@ -134,7 +203,8 @@ impl Ppu {
                     self.dot = 0;
                     self.mode = 0;
                     self.window_line = 0;
-                    self.front.fill(DMG_PALETTE[0]);
+                    let blank = self.blank_color();
+                    self.front.fill(blank);
                 } else if !was_on && self.lcd_on() {
                     self.mode = 2;
                 }
@@ -149,17 +219,29 @@ impl Ppu {
             0xFF49 => self.obp1 = value,
             0xFF4A => self.wy = value,
             0xFF4B => self.wx = value,
+            0xFF4F if self.cgb => self.vram_bank = value & 0x01,
+            0xFF68 if self.cgb => self.bcps = value & 0xBF,
+            0xFF69 if self.cgb => {
+                self.bg_palettes[(self.bcps & 0x3F) as usize] = value;
+                self.bcps = auto_increment(self.bcps);
+            }
+            0xFF6A if self.cgb => self.ocps = value & 0xBF,
+            0xFF6B if self.cgb => {
+                self.obj_palettes[(self.ocps & 0x3F) as usize] = value;
+                self.ocps = auto_increment(self.ocps);
+            }
             _ => {}
         }
     }
 
-    /// Avance d'un M-cycle (4 dots). Renvoie les interruptions à demander.
-    pub fn tick(&mut self) -> u8 {
+    /// Avance de `dots` dots : 4 par M-cycle, 2 en double vitesse.
+    /// Renvoie les interruptions à demander.
+    pub fn tick(&mut self, dots: u32) -> u8 {
         if !self.lcd_on() {
             return 0;
         }
         let mut irq = 0;
-        for _ in 0..4 {
+        for _ in 0..dots {
             irq |= self.step_dot();
         }
         irq
@@ -175,6 +257,7 @@ impl Ppu {
             } else if self.dot == HBLANK_START {
                 self.render_line();
                 self.mode = 0;
+                self.hblank_started = true;
             }
         }
 
@@ -226,6 +309,10 @@ impl Ppu {
     }
 
     fn render_line(&mut self) {
+        if self.cgb {
+            self.render_line_cgb();
+            return;
+        }
         let ly = self.ly;
         // Couleurs brutes du fond, nécessaires pour la priorité des sprites.
         let mut bg_color = [0u8; SCREEN_WIDTH];
@@ -339,6 +426,142 @@ impl Ppu {
     }
 }
 
+impl Ppu {
+    fn render_line_cgb(&mut self) {
+        let ly = self.ly;
+        let mut bg_color = [0u8; SCREEN_WIDTH];
+        let mut bg_priority = [false; SCREEN_WIDTH];
+        let mut pixels = [0u32; SCREEN_WIDTH];
+
+        // En mode Color, le fond est toujours dessiné : le bit 0 de LCDC
+        // décide seulement si le fond peut passer devant les sprites.
+        let window_visible = self.lcdc & LCDC_WIN_ON != 0 && self.wy <= ly && self.wx <= 166;
+        let window_x = self.wx as i16 - 7;
+        let mut window_drawn = false;
+
+        for x in 0..SCREEN_WIDTH {
+            let (map_bit, px, py) = if window_visible && x as i16 >= window_x {
+                window_drawn = true;
+                (LCDC_WIN_MAP, (x as i16 - window_x) as u8, self.window_line)
+            } else {
+                (
+                    LCDC_BG_MAP,
+                    (x as u8).wrapping_add(self.scx),
+                    ly.wrapping_add(self.scy),
+                )
+            };
+            let map = if self.lcdc & map_bit != 0 {
+                0x1C00
+            } else {
+                0x1800
+            };
+            let offset = map + (py as usize / 8) * 32 + px as usize / 8;
+            let index = self.vram[offset];
+            // Les attributs sont au même endroit, dans la banque 1.
+            let attr = self.vram[0x2000 + offset];
+
+            let mut row = py as usize % 8;
+            if attr & 0x40 != 0 {
+                row = 7 - row;
+            }
+            let mut col = px as usize % 8;
+            if attr & 0x20 != 0 {
+                col = 7 - col;
+            }
+            let bank = ((attr >> 3) & 1) as usize * 0x2000;
+            let color = self.tile_pixel(bank + self.bg_tile_addr(index), row, col);
+
+            bg_color[x] = color;
+            bg_priority[x] = attr & 0x80 != 0;
+            pixels[x] = Self::cgb_color(&self.bg_palettes, attr & 0x07, color);
+        }
+        if window_drawn {
+            self.window_line += 1;
+        }
+
+        if self.lcdc & LCDC_OBJ_ON != 0 {
+            self.render_sprites_cgb(ly, &bg_color, &bg_priority, &mut pixels);
+        }
+
+        self.back[ly as usize * SCREEN_WIDTH..][..SCREEN_WIDTH].copy_from_slice(&pixels);
+    }
+
+    fn render_sprites_cgb(
+        &self,
+        ly: u8,
+        bg_color: &[u8; SCREEN_WIDTH],
+        bg_priority: &[bool; SCREEN_WIDTH],
+        pixels: &mut [u32; SCREEN_WIDTH],
+    ) {
+        let height: i16 = if self.lcdc & LCDC_OBJ_TALL != 0 {
+            16
+        } else {
+            8
+        };
+        let line = ly as i16 + 16;
+        // Sans le bit 0 de LCDC, les sprites passent toujours devant le fond.
+        let bg_can_win = self.lcdc & LCDC_BG_ON != 0;
+
+        // Au plus 10 sprites par ligne. En mode Color, la priorité suit
+        // uniquement l'ordre dans l'OAM (pas la position horizontale).
+        let mut sprites = [0usize; 10];
+        let mut count = 0;
+        for i in 0..40 {
+            let y = self.oam[i * 4] as i16;
+            if line >= y && line < y + height {
+                sprites[count] = i;
+                count += 1;
+                if count == 10 {
+                    break;
+                }
+            }
+        }
+
+        for (x, pixel) in pixels.iter_mut().enumerate() {
+            let sx = x as i16;
+            for &i in &sprites[..count] {
+                let left = self.oam[i * 4 + 1] as i16 - 8;
+                if sx < left || sx >= left + 8 {
+                    continue;
+                }
+                let y = self.oam[i * 4] as i16;
+                let mut tile = self.oam[i * 4 + 2];
+                let attr = self.oam[i * 4 + 3];
+                if height == 16 {
+                    tile &= 0xFE;
+                }
+                let mut row = line - y;
+                if attr & 0x40 != 0 {
+                    row = height - 1 - row;
+                }
+                let mut col = sx - left;
+                if attr & 0x20 != 0 {
+                    col = 7 - col;
+                }
+                let bank = ((attr >> 3) & 1) as usize * 0x2000;
+                let color = self.tile_pixel(bank + tile as usize * 16, row as usize, col as usize);
+                if color == 0 {
+                    continue;
+                }
+                let behind = attr & 0x80 != 0 || bg_priority[x];
+                if !bg_can_win || bg_color[x] == 0 || !behind {
+                    *pixel = Self::cgb_color(&self.obj_palettes, attr & 0x07, color);
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Avance l'index d'une palette si l'auto-incrément (bit 7) est actif.
+fn auto_increment(index: u8) -> u8 {
+    if index & 0x80 != 0 {
+        0x80 | ((index + 1) & 0x3F)
+    } else {
+        index
+    }
+}
+
 impl Default for Ppu {
     fn default() -> Self {
         Self::new()
@@ -352,13 +575,118 @@ mod tests {
     fn run_dots(ppu: &mut Ppu, dots: u32) -> u8 {
         let mut irq = 0;
         for _ in 0..dots / 4 {
-            irq |= ppu.tick();
+            irq |= ppu.tick(4);
         }
         irq
     }
 
     fn pixel(ppu: &Ppu, x: usize, y: usize) -> u32 {
         ppu.frame()[y * SCREEN_WIDTH + x]
+    }
+
+    /// Écrit une couleur RGB 15 bits dans une palette Color.
+    fn set_cgb_color(ppu: &mut Ppu, obj: bool, palette: u8, color: u8, rgb555: u16) {
+        let (index_reg, data_reg) = if obj {
+            (0xFF6A, 0xFF6B)
+        } else {
+            (0xFF68, 0xFF69)
+        };
+        ppu.write_reg(index_reg, 0x80 | (palette * 8 + color * 2));
+        let [lo, hi] = rgb555.to_le_bytes();
+        ppu.write_reg(data_reg, lo);
+        ppu.write_reg(data_reg, hi);
+    }
+
+    const RED: u16 = 0x001F;
+    const BLUE: u16 = 0x7C00;
+
+    #[test]
+    fn cgb_palette_index_auto_increments() {
+        let mut ppu = Ppu::with_mode(true);
+        ppu.write_reg(0xFF68, 0x80 | 0x3F);
+        ppu.write_reg(0xFF69, 0x12);
+        // Après 0x3F, l'index revient à 0 en gardant l'auto-incrément.
+        assert_eq!(ppu.read_reg(0xFF68), 0x80 | 0x40);
+        ppu.write_reg(0xFF68, 0x3F);
+        assert_eq!(ppu.read_reg(0xFF69), 0x12);
+    }
+
+    #[test]
+    fn cgb_vram_has_two_banks() {
+        let mut ppu = Ppu::with_mode(true);
+        ppu.write_vram(0x8000, 0x11);
+        ppu.write_reg(0xFF4F, 1);
+        assert_eq!(ppu.read_vram(0x8000), 0x00);
+        ppu.write_vram(0x8000, 0x22);
+        ppu.write_reg(0xFF4F, 0);
+        assert_eq!(ppu.read_vram(0x8000), 0x11);
+        assert_eq!(ppu.vram[0x2000], 0x22);
+        // En mode classique, VBK n'existe pas.
+        assert_eq!(Ppu::new().read_reg(0xFF4F), 0xFF);
+    }
+
+    #[test]
+    fn cgb_background_uses_tile_attributes() {
+        let mut ppu = Ppu::with_mode(true);
+        set_cgb_color(&mut ppu, false, 3, 1, RED);
+        // Tuile 0 en banque 1 : couleur 1 partout. La tuile 0 de la banque 0 reste vide.
+        for row in 0..8 {
+            ppu.vram[0x2000 + row * 2] = 0xFF;
+        }
+        // Attribut de la première case de la carte : palette 3, tuile en banque 1.
+        ppu.vram[0x2000 + 0x1800] = 0x08 | 0x03;
+        run_dots(&mut ppu, 456 * 144);
+        assert_eq!(pixel(&ppu, 0, 0), 0x00FF_0000);
+        // La case suivante n'a pas d'attribut : tuile vide, palette 0 blanche.
+        assert_eq!(pixel(&ppu, 8, 0), 0x00FF_FFFF);
+    }
+
+    #[test]
+    fn cgb_sprite_priority_follows_oam_order() {
+        let mut ppu = Ppu::with_mode(true);
+        ppu.write_reg(0xFF40, 0x93);
+        set_cgb_color(&mut ppu, true, 0, 3, RED);
+        set_cgb_color(&mut ppu, true, 1, 3, BLUE);
+        for row in 0..8 {
+            ppu.vram[16 + row * 2] = 0xFF;
+            ppu.vram[16 + row * 2 + 1] = 0xFF;
+        }
+        // Le sprite 0 est plus à droite mais passe quand même devant (ordre OAM).
+        ppu.oam[..8].copy_from_slice(&[16, 12, 1, 0x00, 16, 8, 1, 0x01]);
+        run_dots(&mut ppu, 456 * 144);
+        assert_eq!(pixel(&ppu, 4, 0), 0x00FF_0000, "sprite 0 devant");
+        assert_eq!(
+            pixel(&ppu, 0, 0),
+            0x0000_00FF,
+            "seul le sprite 1 couvre x = 0"
+        );
+    }
+
+    #[test]
+    fn cgb_bg_priority_attribute_hides_sprites() {
+        let mut ppu = Ppu::with_mode(true);
+        ppu.write_reg(0xFF40, 0x93);
+        set_cgb_color(&mut ppu, false, 0, 1, BLUE);
+        set_cgb_color(&mut ppu, true, 0, 3, RED);
+        for row in 0..8 {
+            ppu.vram[row * 2] = 0xFF; // fond : couleur 1
+            ppu.vram[16 + row * 2] = 0xFF; // sprite : couleur 3
+            ppu.vram[16 + row * 2 + 1] = 0xFF;
+        }
+        ppu.vram[0x2000 + 0x1800] = 0x80; // case prioritaire
+        ppu.oam[..4].copy_from_slice(&[16, 8, 1, 0]);
+        run_dots(&mut ppu, 456 * 144);
+        assert_eq!(pixel(&ppu, 0, 0), 0x0000_00FF, "le fond passe devant");
+
+        // Sans le bit 0 de LCDC, le sprite repasse devant.
+        let mut ppu2 = Ppu::with_mode(true);
+        ppu2.write_reg(0xFF40, 0x92);
+        ppu2.vram.copy_from_slice(&ppu.vram);
+        ppu2.oam.copy_from_slice(&ppu.oam);
+        ppu2.bg_palettes.copy_from_slice(&ppu.bg_palettes);
+        ppu2.obj_palettes.copy_from_slice(&ppu.obj_palettes);
+        run_dots(&mut ppu2, 456 * 144);
+        assert_eq!(pixel(&ppu2, 0, 0), 0x00FF_0000);
     }
 
     #[test]

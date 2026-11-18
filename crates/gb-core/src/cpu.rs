@@ -21,6 +21,8 @@ pub trait Bus {
     fn write(&mut self, addr: u16, value: u8);
     /// Fait avancer le reste de la machine d'un M-cycle (4 T-cycles).
     fn tick(&mut self);
+    /// Instruction STOP. Sur Game Boy Color, elle sert à changer de vitesse.
+    fn stop(&mut self) {}
 }
 
 /// Registres du SM83.
@@ -87,6 +89,25 @@ pub struct Cpu {
 impl Cpu {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// État des registres juste après la boot ROM d'une Game Boy Color
+    /// qui lance un jeu Color. A = 0x11 permet au jeu de reconnaître la console.
+    pub fn post_boot_cgb() -> Self {
+        let mut cpu = Self::new();
+        cpu.regs = Registers {
+            a: 0x11,
+            f: 0x80,
+            b: 0x00,
+            c: 0x00,
+            d: 0xFF,
+            e: 0x56,
+            h: 0x00,
+            l: 0x0D,
+            sp: 0xFFFE,
+            pc: 0x0100,
+        };
+        cpu
     }
 
     /// État des registres juste après la boot ROM d'une Game Boy (DMG).
@@ -465,9 +486,10 @@ impl Cpu {
                 self.write(bus, addr.wrapping_add(1), hi);
             }
 
-            // STOP : l'octet suivant est ignoré.
+            // STOP : l'octet suivant est ignoré. Sur Color, change de vitesse si demandé.
             0x10 => {
                 self.fetch(bus);
+                bus.stop();
             }
 
             // JR e / JR cc,e

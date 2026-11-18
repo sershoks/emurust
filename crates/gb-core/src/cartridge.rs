@@ -48,6 +48,8 @@ pub struct Header {
     pub title: String,
     pub mbc: Mbc,
     pub cgb_support: bool,
+    /// Le jeu ne fonctionne que sur Game Boy Color (drapeau 0xC0).
+    pub cgb_only: bool,
     pub rom_size: usize,
     pub ram_size: usize,
     /// `true` si la somme de contrôle de l'en-tête est correcte.
@@ -348,12 +350,12 @@ impl Cartridge {
         Ok(())
     }
 
-    /// Avance d'un M-cycle (4 T-cycles) : fait tourner l'horloge des MBC3.
-    pub fn tick(&mut self) {
+    /// Avance de `cycles` T-cycles de temps réel : fait tourner l'horloge des MBC3.
+    pub fn tick(&mut self, cycles: u32) {
         if self.header.mbc != Mbc::Mbc3 {
             return;
         }
-        self.rtc_cycles += 4;
+        self.rtc_cycles += cycles;
         if self.rtc_cycles >= CYCLES_PER_SECOND {
             self.rtc_cycles -= CYCLES_PER_SECOND;
             self.rtc.advance_second();
@@ -412,6 +414,7 @@ impl Cartridge {
             title,
             mbc: Mbc::from_byte(data[CART_TYPE]),
             cgb_support,
+            cgb_only: cgb_flag == 0xC0,
             rom_size,
             ram_size,
             checksum_ok: header_checksum(data) == data[HEADER_CHECKSUM],
@@ -546,7 +549,7 @@ pub(crate) mod tests {
         let mut cart = Cartridge::from_bytes(&banked_rom(0x10, 0x00, 2)).unwrap();
         cart.write_rom(0x0000, 0x0A);
         for _ in 0..(CYCLES_PER_SECOND / 4) * 3 {
-            cart.tick();
+            cart.tick(4);
         }
         cart.write_rom(0x4000, 0x08); // registre des secondes
         assert_eq!(
@@ -561,7 +564,7 @@ pub(crate) mod tests {
 
         // La valeur reste figée tant qu'on ne verrouille pas à nouveau.
         for _ in 0..CYCLES_PER_SECOND / 4 {
-            cart.tick();
+            cart.tick(4);
         }
         assert_eq!(cart.read_ram(0xA000), 3);
     }

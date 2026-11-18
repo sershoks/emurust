@@ -13,6 +13,10 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
   - [x] Cartouches MBC1, MBC3 (avec horloge RTC) et MBC5
   - [x] Sauvegardes (.sav compatibles avec les autres émulateurs, horloge MBC3 incluse)
   - [x] Sauvegardes instantanées (4 emplacements par jeu)
+- [x] Game Boy Color
+  - [x] VRAM et WRAM en banques, palettes 15 bits, attributs de tuiles
+  - [x] Priorités des sprites propres à la Color, double vitesse, HDMA
+  - [x] Les anciens jeux tournent aussi sur la Color (mode classique)
 - [ ] ... (les suivants viendront un par un)
 
 ## Légal
@@ -46,6 +50,7 @@ Au premier lancement, le launcher crée un dossier `roms` avec un sous-dossier p
 ```
 roms/
   gb/      vos jeux Game Boy (.gb)
+  gbc/     vos jeux Game Boy Color (.gbc, et aussi .gb)
 ```
 
 Placez-y vos propres ROMs, cliquez sur **Actualiser**, puis sur un jeu pour le lancer.

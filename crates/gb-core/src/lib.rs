@@ -1,4 +1,4 @@
-//! Cœur d'émulation Game Boy (DMG).
+//! Cœur d'émulation Game Boy (DMG) et Game Boy Color (CGB).
 //!
 //! État actuel : CPU complet, bus mémoire, MBC1/MBC3/MBC5, timer, port série,
 //! écran (PPU) et son (APU).
@@ -23,7 +23,7 @@ pub const CYCLES_PER_FRAME: u64 = 70_224;
 
 pub use ppu::DMG_PALETTE;
 
-const INFO: SystemInfo = SystemInfo {
+const INFO_DMG: SystemInfo = SystemInfo {
     id: "gb",
     name: "Game Boy",
     screen_width: SCREEN_WIDTH,
@@ -31,6 +31,14 @@ const INFO: SystemInfo = SystemInfo {
     // 4 194 304 Hz / 70 224 cycles par image
     frame_rate: 59.727_5,
     extensions: &["gb"],
+};
+
+const INFO_CGB: SystemInfo = SystemInfo {
+    id: "gbc",
+    name: "Game Boy Color",
+    // Une Color lit aussi les anciennes cartouches.
+    extensions: &["gbc", "gb"],
+    ..INFO_DMG
 };
 
 /// La machine Game Boy complète.
@@ -41,11 +49,28 @@ pub struct GameBoy {
     /// Un bit par bouton, 1 = appuyé.
     buttons: u8,
     sample_rate: u32,
+    /// La machine émulée est une Game Boy Color.
+    color_hardware: bool,
+    /// Le jeu chargé tourne en mode Color (console Color + cartouche compatible).
+    cgb_mode: bool,
 }
 
 impl GameBoy {
+    /// Une Game Boy classique : tous les jeux tournent en 4 teintes de vert.
     pub fn new() -> Self {
+        Self::with_hardware(false)
+    }
+
+    /// Une Game Boy Color : les jeux Color tournent en couleur, les anciens
+    /// jeux en mode classique.
+    pub fn color() -> Self {
+        Self::with_hardware(true)
+    }
+
+    fn with_hardware(color_hardware: bool) -> Self {
         GameBoy {
+            color_hardware,
+            cgb_mode: false,
             cpu: Cpu::post_boot_dmg(),
             bus: None,
             framebuffer: vec![DMG_PALETTE[0]; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize],
@@ -61,6 +86,11 @@ impl GameBoy {
 
     pub fn cpu(&self) -> &Cpu {
         &self.cpu
+    }
+
+    /// Le jeu chargé tourne en mode Color.
+    pub fn is_cgb_mode(&self) -> bool {
+        self.cgb_mode
     }
 
     /// Tout ce que la ROM a envoyé sur le port série depuis le démarrage.
@@ -90,7 +120,11 @@ impl Default for GameBoy {
 
 impl Emulator for GameBoy {
     fn info(&self) -> SystemInfo {
-        INFO
+        if self.color_hardware {
+            INFO_CGB
+        } else {
+            INFO_DMG
+        }
     }
 
     fn load_rom(&mut self, data: &[u8]) -> Result<(), EmuError> {
@@ -103,15 +137,25 @@ impl Emulator for GameBoy {
                 )));
             }
         }
-        self.bus = Some(GbBus::new(cartridge));
+        if cartridge.header.cgb_only && !self.color_hardware {
+            return Err(EmuError::Unsupported(
+                "ce jeu ne fonctionne que sur Game Boy Color".into(),
+            ));
+        }
+        self.cgb_mode = self.color_hardware && cartridge.header.cgb_support;
+        self.bus = Some(GbBus::new(cartridge, self.cgb_mode));
         self.reset();
         Ok(())
     }
 
     fn reset(&mut self) {
-        self.cpu = Cpu::post_boot_dmg();
+        self.cpu = if self.cgb_mode {
+            Cpu::post_boot_cgb()
+        } else {
+            Cpu::post_boot_dmg()
+        };
         if let Some(bus) = self.bus.take() {
-            let mut bus = GbBus::new(bus.cartridge);
+            let mut bus = GbBus::new(bus.cartridge, self.cgb_mode);
             bus.apu.set_sample_rate(self.sample_rate);
             self.bus = Some(bus);
         }
@@ -124,8 +168,10 @@ impl Emulator for GameBoy {
             return;
         };
         bus.buttons = self.buttons;
-        let target = self.cpu.cycles + CYCLES_PER_FRAME;
-        while self.cpu.cycles < target {
+        // On compte en temps réel : en double vitesse, le CPU fait deux fois
+        // plus de cycles pendant la même image.
+        let target = bus.clock + CYCLES_PER_FRAME;
+        while bus.clock < target {
             self.cpu.step(bus);
         }
     }
@@ -286,6 +332,66 @@ mod tests {
         assert!(gb.load_state(&truncated).is_err());
         // L'émulateur reste utilisable après un échec.
         gb.run_frame();
+    }
+
+    /// Fausse ROM Color (0x80 : compatible Color et classique).
+    fn color_rom_with_program(program: &[u8]) -> Vec<u8> {
+        let mut rom = rom_with_program(program);
+        rom[0x0143] = 0x80;
+        rom[0x014D] = cartridge::header_checksum(&rom);
+        rom
+    }
+
+    #[test]
+    fn color_console_runs_color_games_in_color_mode() {
+        let mut gb = GameBoy::color();
+        gb.load_rom(&color_rom_with_program(&[0x18, 0xFE])).unwrap();
+        assert!(gb.is_cgb_mode());
+        assert_eq!(gb.cpu().regs.a, 0x11, "le jeu doit reconnaître une Color");
+        assert_eq!(gb.info().id, "gbc");
+
+        // Un vieux jeu sur Color tourne en mode classique.
+        gb.load_rom(&rom_with_program(&[0x18, 0xFE])).unwrap();
+        assert!(!gb.is_cgb_mode());
+        assert_eq!(gb.cpu().regs.a, 0x01);
+
+        // Une Game Boy classique ignore le drapeau Color...
+        let mut dmg = GameBoy::new();
+        dmg.load_rom(&color_rom_with_program(&[0x18, 0xFE]))
+            .unwrap();
+        assert!(!dmg.is_cgb_mode());
+
+        // ...mais refuse les jeux exclusivement Color.
+        let mut exclusive = color_rom_with_program(&[0x18, 0xFE]);
+        exclusive[0x0143] = 0xC0;
+        exclusive[0x014D] = cartridge::header_checksum(&exclusive);
+        assert!(matches!(
+            dmg.load_rom(&exclusive),
+            Err(EmuError::Unsupported(_))
+        ));
+        assert!(GameBoy::color().load_rom(&exclusive).is_ok());
+    }
+
+    #[test]
+    fn stop_switches_to_double_speed() {
+        #[rustfmt::skip]
+        let program = [
+            0x3E, 0x01, 0xE0, 0x4D, // LD A,1 ; LDH (KEY1),A
+            0x10, 0x00,             // STOP
+            0xF0, 0x4D,             // LDH A,(KEY1)
+            0xEA, 0x00, 0xC0,       // LD (0xC000),A
+            0x18, 0xFE,             // boucle infinie
+        ];
+        let mut gb = GameBoy::color();
+        gb.load_rom(&color_rom_with_program(&program)).unwrap();
+        gb.run_frame();
+        let bus = gb.bus.as_mut().unwrap();
+        assert!(bus.double_speed);
+        assert_eq!(cpu::Bus::read(bus, 0xC000) & 0x80, 0x80);
+        // En double vitesse, une image contient deux fois plus de cycles CPU.
+        let before = gb.cpu().cycles;
+        gb.run_frame();
+        assert_eq!(gb.cpu().cycles - before, 2 * CYCLES_PER_FRAME);
     }
 
     #[test]
