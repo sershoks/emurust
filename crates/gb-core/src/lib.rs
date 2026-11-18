@@ -1,15 +1,22 @@
 //! Cœur d'émulation Game Boy (DMG).
 //!
-//! État actuel : lecture de l'en-tête de cartouche et squelette de la machine.
-//! CPU, mémoire, PPU, timers et son viendront étape par étape.
+//! État actuel : CPU complet, bus mémoire, MBC1, timer et port série.
+//! L'écran (PPU) et le son viendront ensuite.
 
+pub mod bus;
 pub mod cartridge;
+pub mod cpu;
 
-use cartridge::Cartridge;
+use bus::GbBus;
+use cartridge::{Cartridge, Mbc};
+use cpu::Cpu;
 use emu_core::{Button, EmuError, Emulator, SystemInfo};
 
 pub const SCREEN_WIDTH: u32 = 160;
 pub const SCREEN_HEIGHT: u32 = 144;
+
+/// T-cycles par image : 154 lignes de 456 cycles.
+pub const CYCLES_PER_FRAME: u64 = 70_224;
 
 /// Palette verte de 4 teintes, du plus clair au plus foncé (format 0x00RRGGBB).
 pub const DMG_PALETTE: [u32; 4] = [0x00E0_F8D0, 0x0088_C070, 0x0034_6856, 0x0008_1820];
@@ -26,7 +33,8 @@ const INFO: SystemInfo = SystemInfo {
 
 /// La machine Game Boy complète.
 pub struct GameBoy {
-    cartridge: Option<Cartridge>,
+    cpu: Cpu,
+    bus: Option<GbBus>,
     framebuffer: Vec<u32>,
     /// Un bit par bouton, 1 = appuyé.
     buttons: u8,
@@ -35,7 +43,8 @@ pub struct GameBoy {
 impl GameBoy {
     pub fn new() -> Self {
         GameBoy {
-            cartridge: None,
+            cpu: Cpu::post_boot_dmg(),
+            bus: None,
             framebuffer: vec![DMG_PALETTE[0]; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize],
             buttons: 0,
         }
@@ -43,7 +52,16 @@ impl GameBoy {
 
     /// Cartouche actuellement chargée, s'il y en a une.
     pub fn cartridge(&self) -> Option<&Cartridge> {
-        self.cartridge.as_ref()
+        self.bus.as_ref().map(|bus| &bus.cartridge)
+    }
+
+    pub fn cpu(&self) -> &Cpu {
+        &self.cpu
+    }
+
+    /// Tout ce que la ROM a envoyé sur le port série depuis le démarrage.
+    pub fn serial_output(&self) -> &[u8] {
+        self.bus.as_ref().map_or(&[], |bus| &bus.serial_output)
     }
 
     fn button_bit(button: Button) -> u8 {
@@ -72,18 +90,38 @@ impl Emulator for GameBoy {
     }
 
     fn load_rom(&mut self, data: &[u8]) -> Result<(), EmuError> {
-        self.cartridge = Some(Cartridge::from_bytes(data)?);
+        let cartridge = Cartridge::from_bytes(data)?;
+        match cartridge.header.mbc {
+            Mbc::RomOnly | Mbc::Mbc1 => {}
+            other => {
+                return Err(EmuError::Unsupported(format!(
+                    "contrôleur de cartouche {other:?} pas encore émulé"
+                )));
+            }
+        }
+        self.bus = Some(GbBus::new(cartridge));
         self.reset();
         Ok(())
     }
 
     fn reset(&mut self) {
+        self.cpu = Cpu::post_boot_dmg();
+        if let Some(bus) = self.bus.take() {
+            self.bus = Some(GbBus::new(bus.cartridge));
+        }
         self.framebuffer.fill(DMG_PALETTE[0]);
         self.buttons = 0;
     }
 
     fn run_frame(&mut self) {
-        // Le CPU n'est pas encore émulé : rien ne se passe pour l'instant.
+        let Some(bus) = self.bus.as_mut() else {
+            return;
+        };
+        bus.buttons = self.buttons;
+        let target = self.cpu.cycles + CYCLES_PER_FRAME;
+        while self.cpu.cycles < target {
+            self.cpu.step(bus);
+        }
     }
 
     fn framebuffer(&self) -> &[u32] {
@@ -105,6 +143,14 @@ mod tests {
     use super::*;
     use cartridge::tests::fake_rom;
 
+    /// Fausse ROM dont le programme démarre en 0x0150.
+    fn rom_with_program(program: &[u8]) -> Vec<u8> {
+        let mut rom = fake_rom("PROGRAM", 0x00);
+        rom[0x0100..0x0103].copy_from_slice(&[0xC3, 0x50, 0x01]); // JP 0x0150
+        rom[0x0150..0x0150 + program.len()].copy_from_slice(program);
+        rom
+    }
+
     #[test]
     fn framebuffer_has_screen_size() {
         let gb = GameBoy::new();
@@ -119,6 +165,13 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_mbc_is_rejected() {
+        let mut gb = GameBoy::new();
+        let err = gb.load_rom(&fake_rom("MBC5", 0x19)).unwrap_err();
+        assert!(matches!(err, EmuError::Unsupported(_)));
+    }
+
+    #[test]
     fn buttons_toggle() {
         let mut gb = GameBoy::new();
         gb.set_button(Button::Start, true);
@@ -126,5 +179,19 @@ mod tests {
         assert_eq!(gb.buttons, 0b1001_0000);
         gb.set_button(Button::Start, false);
         assert_eq!(gb.buttons, 0b0001_0000);
+    }
+
+    #[test]
+    fn program_writes_to_serial() {
+        #[rustfmt::skip]
+        let program = [
+            0x3E, b'O', 0xE0, 0x01, 0x3E, 0x81, 0xE0, 0x02, // envoie 'O'
+            0x3E, b'K', 0xE0, 0x01, 0x3E, 0x81, 0xE0, 0x02, // envoie 'K'
+            0x18, 0xFE,                                     // boucle infinie
+        ];
+        let mut gb = GameBoy::new();
+        gb.load_rom(&rom_with_program(&program)).unwrap();
+        gb.run_frame();
+        assert_eq!(gb.serial_output(), b"OK");
     }
 }

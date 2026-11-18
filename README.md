@@ -6,6 +6,11 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
 
 - [ ] Launcher (version ligne de commande en place)
 - [ ] Game Boy (DMG)
+  - [x] CPU SM83 (tous les opcodes, timing au cycle près)
+  - [x] Bus mémoire, MBC1, timer, port série
+  - [ ] PPU (écran)
+  - [ ] Son (APU)
+  - [ ] MBC3 / MBC5
 - [ ] ... (les suivants viendront un par un)
 
 ## Légal
@@ -33,4 +38,13 @@ crates/
 ```
 cargo run
 cargo test
+```
+
+## Tester le CPU avec une ROM de test
+
+Les ROMs de test CPU open source écrivent leur résultat sur le port série.
+Elles ne sont pas incluses dans ce dépôt : téléchargez-les vous-même depuis leur source.
+
+```
+cargo run --release -p gb-core --example serial -- chemin/vers/test.gb
 ```

@@ -49,14 +49,75 @@ pub struct Header {
     pub checksum_ok: bool,
 }
 
-/// Une cartouche chargée en mémoire.
+/// Une cartouche chargée en mémoire, avec l'état de son contrôleur de banques.
 #[derive(Debug, Clone)]
 pub struct Cartridge {
     pub header: Header,
     pub rom: Vec<u8>,
+    /// RAM de sauvegarde présente sur la cartouche (vide si aucune).
+    pub ram: Vec<u8>,
+    ram_enabled: bool,
+    /// MBC1 : 5 bits bas du numéro de banque ROM (jamais 0).
+    bank_lo: u8,
+    /// MBC1 : 2 bits hauts, banque ROM haute ou banque RAM selon le mode.
+    bank_hi: u8,
+    /// MBC1 : mode de banking avancé.
+    mode: bool,
 }
 
 impl Cartridge {
+    /// Lit dans la zone ROM (0x0000-0x7FFF).
+    pub fn read_rom(&self, addr: u16) -> u8 {
+        let bank = match (self.header.mbc, addr) {
+            (Mbc::Mbc1, 0x0000..=0x3FFF) if self.mode => (self.bank_hi as usize) << 5,
+            (Mbc::Mbc1, 0x4000..=0x7FFF) => ((self.bank_hi as usize) << 5) | self.bank_lo as usize,
+            (_, 0x0000..=0x3FFF) => 0,
+            _ => 1,
+        };
+        let offset = bank * 0x4000 + (addr as usize & 0x3FFF);
+        if self.rom.is_empty() {
+            return 0xFF;
+        }
+        self.rom[offset % self.rom.len()]
+    }
+
+    /// Écriture dans la zone ROM : sert à piloter le contrôleur de banques.
+    pub fn write_rom(&mut self, addr: u16, value: u8) {
+        if self.header.mbc != Mbc::Mbc1 {
+            return;
+        }
+        match addr {
+            0x0000..=0x1FFF => self.ram_enabled = value & 0x0F == 0x0A,
+            0x2000..=0x3FFF => self.bank_lo = (value & 0x1F).max(1),
+            0x4000..=0x5FFF => self.bank_hi = value & 0x03,
+            _ => self.mode = value & 0x01 != 0,
+        }
+    }
+
+    fn ram_offset(&self, addr: u16) -> Option<usize> {
+        if self.ram.is_empty() || (self.header.mbc == Mbc::Mbc1 && !self.ram_enabled) {
+            return None;
+        }
+        let bank = if self.header.mbc == Mbc::Mbc1 && self.mode {
+            self.bank_hi as usize
+        } else {
+            0
+        };
+        Some((bank * 0x2000 + (addr as usize & 0x1FFF)) % self.ram.len())
+    }
+
+    /// Lit dans la RAM de cartouche (0xA000-0xBFFF).
+    pub fn read_ram(&self, addr: u16) -> u8 {
+        self.ram_offset(addr).map_or(0xFF, |i| self.ram[i])
+    }
+
+    /// Écrit dans la RAM de cartouche (0xA000-0xBFFF).
+    pub fn write_ram(&mut self, addr: u16, value: u8) {
+        if let Some(i) = self.ram_offset(addr) {
+            self.ram[i] = value;
+        }
+    }
+
     /// Analyse une ROM et vérifie que son en-tête est cohérent.
     pub fn from_bytes(data: &[u8]) -> Result<Self, EmuError> {
         if data.len() < HEADER_END {
@@ -115,8 +176,13 @@ impl Cartridge {
         };
 
         Ok(Cartridge {
+            ram: vec![0; header.ram_size],
             header,
             rom: data.to_vec(),
+            ram_enabled: false,
+            bank_lo: 1,
+            bank_hi: 0,
+            mode: false,
         })
     }
 }
@@ -157,6 +223,36 @@ pub(crate) mod tests {
         let mut rom = fake_rom("TEST", 0x00);
         rom[HEADER_CHECKSUM] ^= 0xFF;
         assert!(!Cartridge::from_bytes(&rom).unwrap().header.checksum_ok);
+    }
+
+    #[test]
+    fn mbc1_switches_rom_banks() {
+        let mut rom = vec![0u8; 128 * 1024];
+        rom[CART_TYPE] = 0x01;
+        rom[ROM_SIZE] = 0x02;
+        for bank in 0..8 {
+            rom[bank * 0x4000] = bank as u8;
+        }
+        let mut cart = Cartridge::from_bytes(&rom).unwrap();
+        assert_eq!(cart.read_rom(0x4000), 1);
+        cart.write_rom(0x2000, 5);
+        assert_eq!(cart.read_rom(0x4000), 5);
+        // La banque 0 est remplacée par la 1 dans la zone haute.
+        cart.write_rom(0x2000, 0);
+        assert_eq!(cart.read_rom(0x4000), 1);
+        assert_eq!(cart.read_rom(0x0000), 0);
+    }
+
+    #[test]
+    fn mbc1_ram_needs_enable() {
+        let mut rom = fake_rom("RAM", 0x03);
+        rom[RAM_SIZE] = 0x02;
+        let mut cart = Cartridge::from_bytes(&rom).unwrap();
+        cart.write_ram(0xA000, 0x42);
+        assert_eq!(cart.read_ram(0xA000), 0xFF);
+        cart.write_rom(0x0000, 0x0A);
+        cart.write_ram(0xA000, 0x42);
+        assert_eq!(cart.read_ram(0xA000), 0x42);
     }
 
     #[test]
