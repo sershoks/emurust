@@ -11,7 +11,7 @@
 //! | LB / RB              | Page préc./suiv.| —       |
 //! | Start                | Valider        | Start    |
 //! | Select               | —              | Select   |
-//! | Select + Start       | —              | Quitter la partie |
+//! | Select + Start       | —              | Menu pause |
 
 use emu_core::Button;
 use gilrs::{Axis, Button as Pad, EventType, Gilrs};
@@ -40,7 +40,7 @@ pub struct PadFrame {
     pub nav: Nav,
     /// Boutons de console actuellement maintenus.
     pub held: Vec<Button>,
-    /// Select + Start (ou le bouton central) : revenir à la bibliothèque.
+    /// Select + Start (ou le bouton central) : ouvrir ou fermer le menu pause.
     pub exit_game: bool,
     /// Au moins une manette est branchée.
     pub connected: bool,

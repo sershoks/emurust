@@ -62,12 +62,13 @@ une lettre pour sauter aux jeux qui commencent par elle, F5 pour actualiser,
 F3 pour ouvrir le dossier des ROMs, F2 pour l'effet écran cathodique.
 
 En jeu : flèches = croix, X = A, Z = B, Entrée = Start, Retour arrière = Select,
-Échap = retour à la liste des jeux.
+Échap = menu pause (reprendre, redémarrer, effet CRT, son, quitter).
+Le jeu se met aussi en pause quand la fenêtre passe en arrière-plan.
 
 Manettes (Xbox, PlayStation, génériques…) : croix ou stick gauche pour se déplacer,
 A pour valider, B pour revenir, LB / RB pour changer de page. En jeu, les boutons
 A, B, Start et Select correspondent à ceux de la console, et Select + Start
-revient à la bibliothèque.
+ouvre le menu pause.
 
 ## Tester le CPU avec une ROM de test
 

@@ -36,6 +36,10 @@ pub struct GameSession {
     frames: u32,
     /// Temps accumulé quand il n'y a pas de carte son pour donner le rythme.
     time_budget: f64,
+    /// En pause, le jeu ne tourne plus mais reste affiché.
+    pub paused: bool,
+    /// Son coupé : le jeu tourne toujours au même rythme, mais en silence.
+    pub muted: bool,
 }
 
 impl GameSession {
@@ -60,6 +64,8 @@ impl GameSession {
             pixels: Vec::new(),
             frames: 0,
             time_budget: 0.0,
+            paused: false,
+            muted: false,
         })
     }
 
@@ -75,11 +81,15 @@ impl GameSession {
         pad: &[Button],
     ) {
         for (key, button) in KEYMAP {
-            let down = ui.input(|i| i.key_down(key)) || pad.contains(&button);
+            let down = !self.paused && (ui.input(|i| i.key_down(key)) || pad.contains(&button));
             self.emu.set_button(button, down);
         }
 
         let ran = match audio {
+            _ if self.paused => {
+                self.time_budget = 0.0;
+                0
+            }
             // La carte son donne le rythme : on garde environ 50 ms de son d'avance.
             Some(out) => {
                 let target = out.sample_rate as usize / 20;
@@ -114,6 +124,9 @@ impl GameSession {
         self.emu.run_frame();
         let mut samples = Vec::new();
         self.emu.drain_audio(&mut samples);
+        if self.muted {
+            samples.fill(0.0);
+        }
         if let Some(out) = audio {
             out.push(&samples);
         }
@@ -157,6 +170,13 @@ impl GameSession {
             // Une ligne sombre sous chaque ligne de pixels de la console.
             theme::scanlines(ui.painter(), target, scale, 0.35);
         }
+    }
+
+    /// Redémarre le jeu depuis le début. La sauvegarde de la cartouche est conservée.
+    pub fn reset(&mut self) {
+        self.save.write(self.emu.as_ref());
+        self.emu.reset();
+        self.time_budget = 0.0;
     }
 
     /// Écrit la sauvegarde (appelé en quittant la partie).

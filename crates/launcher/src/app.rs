@@ -23,6 +23,24 @@ const ROW_HEIGHT: f32 = 46.0;
 const WHEEL_STEP: f32 = 40.0;
 const TOAST_SECONDS: f64 = 4.0;
 
+/// Entrées du menu pause, dans l'ordre d'affichage.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PauseItem {
+    Resume,
+    Reset,
+    Crt,
+    Sound,
+    Quit,
+}
+
+const PAUSE_ITEMS: [PauseItem; 5] = [
+    PauseItem::Resume,
+    PauseItem::Reset,
+    PauseItem::Crt,
+    PauseItem::Sound,
+    PauseItem::Quit,
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Systems,
@@ -47,6 +65,8 @@ pub struct EmurustApp {
     toast: Option<(String, f64)>,
     window_title: String,
     gamepads: Gamepads,
+    /// Entrée sélectionnée dans le menu pause.
+    pause_index: usize,
     /// État des manettes pour l'image en cours.
     pad: PadFrame,
 }
@@ -72,6 +92,7 @@ impl EmurustApp {
             toast: None,
             window_title: String::new(),
             gamepads: Gamepads::new(),
+            pause_index: 0,
             pad: PadFrame::default(),
         };
         if app.audio.is_none() {
@@ -756,43 +777,200 @@ impl EmurustApp {
     // ------------------------------------------------------------------
 
     fn playing_ui(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        if ui.input(|i| i.key_pressed(Key::Escape)) || self.pad.exit_game {
-            self.stop_game();
-            return;
-        }
+        let now = ui.input(|i| i.time);
         if ui.input(|i| i.key_pressed(Key::F2)) {
             self.crt = !self.crt;
         }
+
+        let paused = self.session.as_ref().is_some_and(|s| s.paused);
+        let toggle = ui.input(|i| i.key_pressed(Key::Escape)) || self.pad.exit_game;
+        if paused {
+            self.pause_menu_input(ui, toggle, now);
+        } else {
+            // Échap, Select + Start, ou la fenêtre qui passe en arrière-plan.
+            let focus_lost = ui.input(|i| i.viewport().focused == Some(false));
+            if toggle || focus_lost {
+                self.pause_index = 0;
+                if let Some(session) = self.session.as_mut() {
+                    session.paused = true;
+                }
+            }
+        }
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+
         let footer = Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - 40.0), rect.max);
         let area = Rect::from_min_max(rect.min, Pos2::new(rect.right(), footer.top()));
-        let audio = self.audio.as_ref();
-        if let Some(session) = self.session.as_mut() {
-            session.ui(ui, area, audio, self.crt, &self.pad.held);
+        session.ui(ui, area, self.audio.as_ref(), self.crt, &self.pad.held);
+        let paused = session.paused;
+        if paused {
+            self.pause_menu_draw(ui, area);
         }
 
         let painter = ui.painter();
         painter.rect_filled(footer, 0.0, Color32::from_rgb(6, 4, 16));
-        theme::footer(
-            painter,
-            footer,
-            &if self.pad.connected {
-                vec![
-                    ("SELECT + START", "Bibliothèque"),
-                    ("ÉCHAP", "Bibliothèque"),
-                    ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
-                ]
-            } else {
-                vec![
-                    ("ÉCHAP", "Bibliothèque"),
-                    ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
-                    ("FLÈCHES", "Croix"),
-                    ("X", "A"),
-                    ("Z", "B"),
-                    ("ENTRÉE", "Start"),
-                    ("RETOUR", "Select"),
-                ]
-            },
+        let pad = self.pad.connected;
+        let hints: Vec<(&str, &str)> = if paused {
+            vec![
+                ("▲ ▼", "Choisir"),
+                (if pad { "A" } else { "ENTRÉE" }, "Valider"),
+                (if pad { "B" } else { "ÉCHAP" }, "Reprendre"),
+            ]
+        } else if pad {
+            vec![
+                ("SELECT + START", "Pause"),
+                ("ÉCHAP", "Pause"),
+                ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
+            ]
+        } else {
+            vec![
+                ("ÉCHAP", "Pause"),
+                ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
+                ("FLÈCHES", "Croix"),
+                ("X", "A"),
+                ("Z", "B"),
+                ("ENTRÉE", "Start"),
+                ("RETOUR", "Select"),
+            ]
+        };
+        theme::footer(painter, footer, &hints);
+    }
+
+    fn pause_label(&self, item: PauseItem) -> String {
+        let on_off = |on: bool| if on { "oui" } else { "non" };
+        match item {
+            PauseItem::Resume => "Reprendre".into(),
+            PauseItem::Reset => "Redémarrer le jeu".into(),
+            PauseItem::Crt => format!("Effet écran cathodique : {}", on_off(self.crt)),
+            PauseItem::Sound => {
+                let muted = self.session.as_ref().is_some_and(|s| s.muted);
+                format!("Son : {}", on_off(!muted))
+            }
+            PauseItem::Quit => "Quitter vers la bibliothèque".into(),
+        }
+    }
+
+    fn pause_menu_input(&mut self, ui: &egui::Ui, toggle: bool, now: f64) {
+        if toggle || self.pad.nav.back {
+            self.activate_pause_item(PauseItem::Resume, now);
+            return;
+        }
+        let count = PAUSE_ITEMS.len();
+        if ui.input(|i| i.key_pressed(Key::ArrowUp)) || self.pad.nav.up {
+            self.pause_index = (self.pause_index + count - 1) % count;
+        }
+        if ui.input(|i| i.key_pressed(Key::ArrowDown)) || self.pad.nav.down {
+            self.pause_index = (self.pause_index + 1) % count;
+        }
+        if ui.input(|i| i.key_pressed(Key::Enter)) || self.pad.nav.confirm {
+            self.activate_pause_item(PAUSE_ITEMS[self.pause_index], now);
+        }
+    }
+
+    fn activate_pause_item(&mut self, item: PauseItem, now: f64) {
+        match item {
+            PauseItem::Resume => {
+                if let Some(session) = self.session.as_mut() {
+                    session.paused = false;
+                }
+            }
+            PauseItem::Reset => {
+                if let Some(session) = self.session.as_mut() {
+                    session.reset();
+                    session.paused = false;
+                }
+                self.notify("Jeu redémarré", now);
+            }
+            PauseItem::Crt => self.crt = !self.crt,
+            PauseItem::Sound => {
+                if let Some(session) = self.session.as_mut() {
+                    session.muted = !session.muted;
+                }
+            }
+            PauseItem::Quit => self.stop_game(),
+        }
+    }
+
+    fn pause_menu_draw(&mut self, ui: &mut egui::Ui, area: Rect) {
+        let now = ui.input(|i| i.time);
+        let accent = self.system().accent;
+        let painter = ui.painter().clone();
+        painter.rect_filled(area, 0.0, Color32::from_black_alpha(170));
+
+        let row_h = 48.0;
+        let size = Vec2::new(460.0, 130.0 + row_h * PAUSE_ITEMS.len() as f32);
+        let panel = Rect::from_center_size(area.center(), size);
+        theme::glow_panel(&painter, panel, accent, 0.8, 16);
+
+        theme::neon_text(
+            &painter,
+            Pos2::new(panel.center().x, panel.top() + 42.0),
+            Align2::CENTER_CENTER,
+            "PAUSE",
+            theme::mono(34.0),
+            accent,
         );
+        if let Some(session) = &self.session {
+            painter.text(
+                Pos2::new(panel.center().x, panel.top() + 78.0),
+                Align2::CENTER_CENTER,
+                fit_text(
+                    &painter,
+                    &session.title,
+                    panel.width() - 40.0,
+                    theme::prop(15.0),
+                ),
+                theme::prop(15.0),
+                theme::TEXT_DIM,
+            );
+        }
+
+        let mut clicked = None;
+        for (i, &item) in PAUSE_ITEMS.iter().enumerate() {
+            let row = Rect::from_min_size(
+                Pos2::new(panel.left() + 24.0, panel.top() + 104.0 + i as f32 * row_h),
+                Vec2::new(panel.width() - 48.0, row_h - 6.0),
+            );
+            let response = ui.interact(row, Id::unique(("pause_item", i)), Sense::click());
+            if response.hovered() && ui.input(|inp| inp.pointer.delta() != Vec2::ZERO) {
+                self.pause_index = i;
+            }
+            if response.clicked() {
+                clicked = Some(item);
+            }
+            let selected = i == self.pause_index;
+            if selected {
+                painter.rect_filled(row, 8, alpha(accent, 0.18));
+                painter.rect_filled(
+                    Rect::from_min_size(row.min, Vec2::new(4.0, row.height())),
+                    2,
+                    accent,
+                );
+                painter.text(
+                    Pos2::new(row.left() + 16.0, row.center().y),
+                    Align2::LEFT_CENTER,
+                    "▸",
+                    theme::mono(18.0),
+                    accent,
+                );
+            }
+            let color = match (item, selected) {
+                (PauseItem::Quit, _) => theme::NEON_PINK,
+                (_, true) => theme::TEXT,
+                _ => theme::TEXT_DIM,
+            };
+            painter.text(
+                Pos2::new(row.left() + 38.0, row.center().y),
+                Align2::LEFT_CENTER,
+                self.pause_label(item),
+                theme::prop(18.0),
+                color,
+            );
+        }
+        if let Some(item) = clicked {
+            self.activate_pause_item(item, now);
+        }
     }
 }
 
