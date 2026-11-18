@@ -10,7 +10,7 @@ use eframe::egui::{self, Align2, Color32, Event, Id, Key, Pos2, Rect, Sense, Vec
 
 use crate::art;
 use crate::audio::AudioOutput;
-use crate::game::GameSession;
+use crate::game::{GameSession, STATE_SLOTS};
 use crate::gamepad::{Gamepads, PadFrame};
 use crate::library::Library;
 use crate::preview::{Preview, Previews};
@@ -27,14 +27,20 @@ const TOAST_SECONDS: f64 = 4.0;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PauseItem {
     Resume,
+    SaveState,
+    LoadState,
+    Slot,
     Reset,
     Crt,
     Sound,
     Quit,
 }
 
-const PAUSE_ITEMS: [PauseItem; 5] = [
+const PAUSE_ITEMS: [PauseItem; 8] = [
     PauseItem::Resume,
+    PauseItem::SaveState,
+    PauseItem::LoadState,
+    PauseItem::Slot,
     PauseItem::Reset,
     PauseItem::Crt,
     PauseItem::Sound,
@@ -67,6 +73,8 @@ pub struct EmurustApp {
     gamepads: Gamepads,
     /// Entrée sélectionnée dans le menu pause.
     pause_index: usize,
+    /// Emplacement de sauvegarde instantanée choisi (1 à `STATE_SLOTS`).
+    state_slot: u8,
     /// État des manettes pour l'image en cours.
     pad: PadFrame,
 }
@@ -93,6 +101,7 @@ impl EmurustApp {
             window_title: String::new(),
             gamepads: Gamepads::new(),
             pause_index: 0,
+            state_slot: 1,
             pad: PadFrame::default(),
         };
         if app.audio.is_none() {
@@ -783,6 +792,14 @@ impl EmurustApp {
         }
 
         let paused = self.session.as_ref().is_some_and(|s| s.paused);
+        if !paused {
+            if ui.input(|i| i.key_pressed(Key::F5)) {
+                self.activate_pause_item(PauseItem::SaveState, now);
+            }
+            if ui.input(|i| i.key_pressed(Key::F8)) {
+                self.activate_pause_item(PauseItem::LoadState, now);
+            }
+        }
         let toggle = ui.input(|i| i.key_pressed(Key::Escape)) || self.pad.exit_game;
         if paused {
             self.pause_menu_input(ui, toggle, now);
@@ -814,6 +831,7 @@ impl EmurustApp {
         let hints: Vec<(&str, &str)> = if paused {
             vec![
                 ("▲ ▼", "Choisir"),
+                ("◀ ▶", "Emplacement"),
                 (if pad { "A" } else { "ENTRÉE" }, "Valider"),
                 (if pad { "B" } else { "ÉCHAP" }, "Reprendre"),
             ]
@@ -826,6 +844,8 @@ impl EmurustApp {
         } else {
             vec![
                 ("ÉCHAP", "Pause"),
+                ("F5", "Sauver l'état"),
+                ("F8", "Charger l'état"),
                 ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
                 ("FLÈCHES", "Croix"),
                 ("X", "A"),
@@ -835,12 +855,29 @@ impl EmurustApp {
             ]
         };
         theme::footer(painter, footer, &hints);
+        let painter = painter.clone();
+        self.toast(&painter, rect, now);
     }
 
     fn pause_label(&self, item: PauseItem) -> String {
         let on_off = |on: bool| if on { "oui" } else { "non" };
         match item {
             PauseItem::Resume => "Reprendre".into(),
+            PauseItem::SaveState => {
+                format!("Sauvegarde instantanée (emplacement {})", self.state_slot)
+            }
+            PauseItem::LoadState => {
+                let empty = !self
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s.has_state(self.state_slot));
+                format!(
+                    "Charger l'état (emplacement {}){}",
+                    self.state_slot,
+                    if empty { " : vide" } else { "" }
+                )
+            }
+            PauseItem::Slot => format!("Emplacement :   ‹  {}  ›", self.state_slot),
             PauseItem::Reset => "Redémarrer le jeu".into(),
             PauseItem::Crt => format!("Effet écran cathodique : {}", on_off(self.crt)),
             PauseItem::Sound => {
@@ -863,6 +900,16 @@ impl EmurustApp {
         if ui.input(|i| i.key_pressed(Key::ArrowDown)) || self.pad.nav.down {
             self.pause_index = (self.pause_index + 1) % count;
         }
+        if ui.input(|i| i.key_pressed(Key::ArrowLeft)) || self.pad.nav.left {
+            self.state_slot = if self.state_slot == 1 {
+                STATE_SLOTS
+            } else {
+                self.state_slot - 1
+            };
+        }
+        if ui.input(|i| i.key_pressed(Key::ArrowRight)) || self.pad.nav.right {
+            self.state_slot = self.state_slot % STATE_SLOTS + 1;
+        }
         if ui.input(|i| i.key_pressed(Key::Enter)) || self.pad.nav.confirm {
             self.activate_pause_item(PAUSE_ITEMS[self.pause_index], now);
         }
@@ -875,6 +922,29 @@ impl EmurustApp {
                     session.paused = false;
                 }
             }
+            PauseItem::SaveState | PauseItem::LoadState => {
+                let slot = self.state_slot;
+                let Some(session) = self.session.as_mut() else {
+                    return;
+                };
+                let result = if item == PauseItem::SaveState {
+                    session
+                        .save_state(slot)
+                        .map(|()| format!("État sauvegardé dans l'emplacement {slot}"))
+                } else {
+                    session
+                        .load_state(slot)
+                        .map(|()| format!("Emplacement {slot} chargé"))
+                };
+                match result {
+                    Ok(message) => {
+                        session.paused = false;
+                        self.notify(message, now);
+                    }
+                    Err(err) => self.notify(err, now),
+                }
+            }
+            PauseItem::Slot => self.state_slot = self.state_slot % STATE_SLOTS + 1,
             PauseItem::Reset => {
                 if let Some(session) = self.session.as_mut() {
                     session.reset();
@@ -898,8 +968,8 @@ impl EmurustApp {
         let painter = ui.painter().clone();
         painter.rect_filled(area, 0.0, Color32::from_black_alpha(170));
 
-        let row_h = 48.0;
-        let size = Vec2::new(460.0, 130.0 + row_h * PAUSE_ITEMS.len() as f32);
+        let row_h = 42.0;
+        let size = Vec2::new(520.0, 130.0 + row_h * PAUSE_ITEMS.len() as f32);
         let panel = Rect::from_center_size(area.center(), size);
         theme::glow_panel(&painter, panel, accent, 0.8, 16);
 

@@ -9,6 +9,8 @@
 //! Le rendu est fait ligne par ligne au début du HBlank, ce qui suffit
 //! pour la très grande majorité des jeux.
 
+use serde::{Deserialize, Serialize};
+
 use crate::bus::{INT_STAT, INT_VBLANK};
 
 pub const SCREEN_WIDTH: usize = 160;
@@ -33,9 +35,10 @@ const LCDC_WIN_ON: u8 = 0x20;
 const LCDC_WIN_MAP: u8 = 0x40;
 const LCDC_LCD_ON: u8 = 0x80;
 
+#[derive(Serialize, Deserialize)]
 pub struct Ppu {
-    pub vram: Box<[u8; 0x2000]>,
-    pub oam: [u8; 0xA0],
+    pub vram: Vec<u8>,
+    pub oam: Vec<u8>,
 
     lcdc: u8,
     /// Seuls les bits 3 à 6 (sources d'interruption STAT) sont stockés.
@@ -67,8 +70,8 @@ impl Ppu {
     pub fn new() -> Self {
         let blank = vec![DMG_PALETTE[0]; SCREEN_WIDTH * SCREEN_HEIGHT];
         Ppu {
-            vram: Box::new([0; 0x2000]),
-            oam: [0; 0xA0],
+            vram: vec![0; 0x2000],
+            oam: vec![0; 0xA0],
             // Valeurs laissées par la boot ROM.
             lcdc: 0x91,
             stat: 0,

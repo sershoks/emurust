@@ -12,6 +12,7 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
   - [x] Son (APU : 2 canaux carrés, onde, bruit, stéréo)
   - [x] Cartouches MBC1, MBC3 (avec horloge RTC) et MBC5
   - [x] Sauvegardes (.sav compatibles avec les autres émulateurs, horloge MBC3 incluse)
+  - [x] Sauvegardes instantanées (4 emplacements par jeu)
 - [ ] ... (les suivants viendront un par un)
 
 ## Légal
@@ -64,6 +65,10 @@ F3 pour ouvrir le dossier des ROMs, F2 pour l'effet écran cathodique.
 En jeu : flèches = croix, X = A, Z = B, Entrée = Start, Retour arrière = Select,
 Échap = menu pause (reprendre, redémarrer, effet CRT, son, quitter).
 Le jeu se met aussi en pause quand la fenêtre passe en arrière-plan.
+
+Sauvegardes instantanées : 4 emplacements par jeu, depuis le menu pause ou avec
+F5 (sauver) et F8 (charger) en jeu. Elles sont écrites à côté de la ROM
+(`Jeu.slot1.state`) et ne contiennent jamais la ROM elle-même.
 
 Manettes (Xbox, PlayStation, génériques…) : croix ou stick gauche pour se déplacer,
 A pour valider, B pour revenir, LB / RB pour changer de page. En jeu, les boutons

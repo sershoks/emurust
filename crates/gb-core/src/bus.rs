@@ -11,6 +11,8 @@
 //! - `FF80-FFFE` HRAM
 //! - `FFFF`      IE (interruptions activées)
 
+use serde::{Deserialize, Serialize};
+
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::cpu::Bus;
@@ -21,12 +23,13 @@ pub const INT_STAT: u8 = 0x02;
 pub const INT_TIMER: u8 = 0x04;
 pub const INT_SERIAL: u8 = 0x08;
 
+#[derive(Serialize, Deserialize)]
 pub struct GbBus {
     pub cartridge: Cartridge,
-    wram: Box<[u8; 0x2000]>,
-    hram: [u8; 0x7F],
+    wram: Vec<u8>,
+    hram: Vec<u8>,
     /// Registres matériels pas encore émulés : simplement mémorisés.
-    io: [u8; 0x80],
+    io: Vec<u8>,
     ie: u8,
     if_: u8,
 
@@ -47,13 +50,13 @@ pub struct GbBus {
 
 impl GbBus {
     pub fn new(cartridge: Cartridge) -> Self {
-        let mut io = [0u8; 0x80];
+        let mut io = vec![0u8; 0x80];
         // Valeurs laissées par la boot ROM.
         io[0x00] = 0x30; // JOYP : aucune sélection
         GbBus {
             cartridge,
-            wram: Box::new([0; 0x2000]),
-            hram: [0; 0x7F],
+            wram: vec![0; 0x2000],
+            hram: vec![0; 0x7F],
             io,
             ie: 0,
             if_: 0x01,

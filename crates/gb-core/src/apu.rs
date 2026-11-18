@@ -10,6 +10,8 @@
 //! les enveloppes de volume et le sweep. Les canaux sont ensuite mixés
 //! en stéréo et rééchantillonnés à la fréquence de la carte son.
 
+use serde::{Deserialize, Serialize};
+
 const CPU_HZ: u64 = 4_194_304;
 /// Le séquenceur avance tous les 8192 T-cycles (512 Hz).
 const FRAME_SEQUENCER_PERIOD: u32 = 8192;
@@ -33,7 +35,7 @@ const READ_MASK: [u8; 0x20] = [
 ];
 
 /// Compteur de durée commun à tous les canaux.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct Length {
     counter: u16,
     enabled: bool,
@@ -57,7 +59,7 @@ impl Length {
 }
 
 /// Enveloppe de volume des canaux 1, 2 et 4.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct Envelope {
     initial: u8,
     up: bool,
@@ -100,7 +102,7 @@ impl Envelope {
 }
 
 /// Canaux 1 et 2 : onde carrée.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct Square {
     enabled: bool,
     duty: u8,
@@ -194,7 +196,7 @@ impl Square {
 }
 
 /// Canal 3 : onde libre.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct Wave {
     enabled: bool,
     dac_on: bool,
@@ -241,7 +243,7 @@ impl Wave {
 }
 
 /// Canal 4 : bruit.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct Noise {
     enabled: bool,
     shift: u8,
@@ -292,6 +294,7 @@ impl Noise {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Apu {
     /// Copie brute des registres FF10-FF2F, pour la relecture.
     regs: [u8; 0x20],
@@ -315,6 +318,7 @@ pub struct Apu {
     cap_left: f32,
     cap_right: f32,
     /// Échantillons stéréo entrelacés (gauche, droite) prêts à être joués.
+    #[serde(skip)]
     samples: Vec<f32>,
 }
 

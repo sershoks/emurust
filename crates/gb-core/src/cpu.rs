@@ -5,6 +5,8 @@
 //! explicitement avec `tick`. Le reste de la machine (timer, écran...) avance
 //! donc en même temps que le CPU, au cycle près.
 
+use serde::{Deserialize, Serialize};
+
 pub const FLAG_Z: u8 = 0x80;
 pub const FLAG_N: u8 = 0x40;
 pub const FLAG_H: u8 = 0x20;
@@ -22,7 +24,7 @@ pub trait Bus {
 }
 
 /// Registres du SM83.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registers {
     pub a: u8,
     pub f: u8,
@@ -66,7 +68,7 @@ impl Registers {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Cpu {
     pub regs: Registers,
     /// Interrupt Master Enable.

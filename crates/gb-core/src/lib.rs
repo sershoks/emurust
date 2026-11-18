@@ -8,6 +8,7 @@ pub mod bus;
 pub mod cartridge;
 pub mod cpu;
 pub mod ppu;
+pub mod state;
 
 use bus::GbBus;
 use cartridge::{Cartridge, Mbc};
@@ -147,6 +148,23 @@ impl Emulator for GameBoy {
         }
     }
 
+    fn save_state(&self) -> Option<Vec<u8>> {
+        Some(state::encode(&self.cpu, self.bus.as_ref()?))
+    }
+
+    fn load_state(&mut self, data: &[u8]) -> Result<(), EmuError> {
+        let Some(bus) = self.bus.as_mut() else {
+            return Err(EmuError::InvalidSave("aucun jeu chargé".into()));
+        };
+        let (cpu, mut restored) = state::decode(data, bus)?;
+        // La ROM ne fait pas partie de l'état : on garde celle déjà chargée.
+        restored.cartridge.rom = std::mem::take(&mut bus.cartridge.rom);
+        restored.apu.set_sample_rate(self.sample_rate);
+        self.cpu = cpu;
+        self.bus = Some(restored);
+        Ok(())
+    }
+
     fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = rate;
         if let Some(bus) = self.bus.as_mut() {
@@ -211,6 +229,63 @@ mod tests {
         assert_eq!(gb.buttons, 0b1001_0000);
         gb.set_button(Button::Start, false);
         assert_eq!(gb.buttons, 0b0001_0000);
+    }
+
+    /// INC A ; LD (0xC000),A ; JR -6 : A et la WRAM changent sans arrêt.
+    const COUNTER: [u8; 6] = [0x3C, 0xEA, 0x00, 0xC0, 0x18, 0xFA];
+
+    #[test]
+    fn save_state_round_trip() {
+        let mut gb = GameBoy::new();
+        gb.load_rom(&rom_with_program(&COUNTER)).unwrap();
+        gb.run_frame();
+        let snapshot = gb.save_state().unwrap();
+        let regs = gb.cpu().regs.clone();
+        let cycles = gb.cpu().cycles;
+        let screen = gb.framebuffer().to_vec();
+
+        for _ in 0..3 {
+            gb.run_frame();
+        }
+        assert_ne!(gb.cpu().cycles, cycles);
+
+        gb.load_state(&snapshot).unwrap();
+        assert_eq!(gb.cpu().regs, regs);
+        assert_eq!(gb.cpu().cycles, cycles);
+        assert_eq!(gb.framebuffer(), &screen[..]);
+        // La ROM est toujours là : le jeu continue de tourner.
+        gb.run_frame();
+        assert!(gb.cpu().cycles > cycles);
+        assert!(!gb.cpu().locked);
+    }
+
+    #[test]
+    fn save_state_from_another_game_is_rejected() {
+        let mut first = GameBoy::new();
+        first.load_rom(&rom_with_program(&COUNTER)).unwrap();
+        let snapshot = first.save_state().unwrap();
+
+        let mut other_rom = rom_with_program(&COUNTER);
+        other_rom[0x0134..0x0139].copy_from_slice(b"AUTRE");
+        other_rom[0x014D] = cartridge::header_checksum(&other_rom);
+        let mut second = GameBoy::new();
+        second.load_rom(&other_rom).unwrap();
+        assert!(matches!(
+            second.load_state(&snapshot),
+            Err(EmuError::InvalidSave(_))
+        ));
+    }
+
+    #[test]
+    fn garbage_save_state_is_rejected() {
+        let mut gb = GameBoy::new();
+        gb.load_rom(&rom_with_program(&COUNTER)).unwrap();
+        assert!(gb.load_state(b"pas un etat").is_err());
+        let mut truncated = gb.save_state().unwrap();
+        truncated.truncate(truncated.len() / 2);
+        assert!(gb.load_state(&truncated).is_err());
+        // L'émulateur reste utilisable après un échec.
+        gb.run_frame();
     }
 
     #[test]

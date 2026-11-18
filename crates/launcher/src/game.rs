@@ -1,6 +1,6 @@
 //! Une partie en cours : l'émulateur, son image, son son et sa sauvegarde.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, ColorImage, Key, TextureHandle, TextureOptions};
 use emu_core::{Button, Emulator};
@@ -27,8 +27,14 @@ const AUTOSAVE_FRAMES: u32 = 300;
 /// Au plus 4 images émulées par image affichée, pour rattraper un retard sans s'emballer.
 const MAX_FRAMES_PER_UPDATE: u32 = 4;
 
+/// Nombre d'emplacements de sauvegarde instantanée par jeu.
+pub const STATE_SLOTS: u8 = 4;
+
 pub struct GameSession {
     pub title: String,
+    rom_path: PathBuf,
+    /// L'image doit être renvoyée à l'écran (après un chargement d'état).
+    frame_stale: bool,
     emu: Box<dyn Emulator>,
     save: SaveFile,
     texture: Option<TextureHandle>,
@@ -58,6 +64,8 @@ impl GameSession {
         let name = path.file_stem().unwrap_or_default().to_string_lossy();
         Ok(GameSession {
             title: format!("{} - {}", system.info.name, name),
+            rom_path: path.to_path_buf(),
+            frame_stale: false,
             emu,
             save,
             texture: None,
@@ -112,7 +120,8 @@ impl GameSession {
                 ran
             }
         };
-        if ran > 0 || self.texture.is_none() {
+        if ran > 0 || self.texture.is_none() || self.frame_stale {
+            self.frame_stale = false;
             self.upload_frame(ui.ctx());
         }
 
@@ -170,6 +179,38 @@ impl GameSession {
             // Une ligne sombre sous chaque ligne de pixels de la console.
             theme::scanlines(ui.painter(), target, scale, 0.35);
         }
+    }
+
+    /// Fichier d'un emplacement, à côté de la ROM : `Jeu.slot1.state`.
+    pub fn state_path(&self, slot: u8) -> PathBuf {
+        self.rom_path.with_extension(format!("slot{slot}.state"))
+    }
+
+    pub fn has_state(&self, slot: u8) -> bool {
+        self.state_path(slot).is_file()
+    }
+
+    /// Sauvegarde instantanée dans un emplacement.
+    pub fn save_state(&mut self, slot: u8) -> Result<(), String> {
+        let data = self
+            .emu
+            .save_state()
+            .ok_or("Ce jeu ne prend pas en charge les sauvegardes instantanées")?;
+        let path = self.state_path(slot);
+        let tmp = path.with_extension("state.tmp");
+        std::fs::write(&tmp, &data)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .map_err(|err| format!("Impossible d'écrire {} : {err}", path.display()))
+    }
+
+    /// Recharge un emplacement. En cas d'échec, la partie continue telle quelle.
+    pub fn load_state(&mut self, slot: u8) -> Result<(), String> {
+        let path = self.state_path(slot);
+        let data = std::fs::read(&path).map_err(|_| format!("L'emplacement {slot} est vide"))?;
+        self.emu.load_state(&data).map_err(|err| err.to_string())?;
+        self.time_budget = 0.0;
+        self.frame_stale = true;
+        Ok(())
     }
 
     /// Redémarre le jeu depuis le début. La sauvegarde de la cartouche est conservée.

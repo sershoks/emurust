@@ -4,6 +4,8 @@
 //! Le logo présent à 0x0104 n'est volontairement ni vérifié ni stocké :
 //! l'émulateur n'en a pas besoin et ce projet n'embarque aucune donnée protégée.
 
+use serde::{Deserialize, Serialize};
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use emu_core::EmuError;
@@ -17,7 +19,7 @@ const RAM_SIZE: usize = 0x0149;
 const HEADER_CHECKSUM: usize = 0x014D;
 
 /// Type de contrôleur mémoire (MBC) présent sur la cartouche.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mbc {
     RomOnly,
     Mbc1,
@@ -41,7 +43,7 @@ impl Mbc {
 }
 
 /// Informations extraites de l'en-tête d'une cartouche.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Header {
     pub title: String,
     pub mbc: Mbc,
@@ -59,7 +61,7 @@ pub struct Header {
 /// Horloge temps réel (RTC) des cartouches MBC3.
 ///
 /// Elle avance avec le temps émulé : une seconde toutes les 4 194 304 T-cycles.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rtc {
     pub seconds: u8,
     pub minutes: u8,
@@ -180,9 +182,11 @@ fn unix_now() -> u64 {
 }
 
 /// Une cartouche chargée en mémoire, avec l'état de son contrôleur de banques.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cartridge {
     pub header: Header,
+    /// La ROM n'est jamais copiée dans les sauvegardes instantanées.
+    #[serde(skip)]
     pub rom: Vec<u8>,
     /// RAM de sauvegarde présente sur la cartouche (vide si aucune).
     pub ram: Vec<u8>,

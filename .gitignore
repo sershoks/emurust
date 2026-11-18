@@ -28,6 +28,7 @@ bios/
 *.sav.tmp
 *.srm
 *.state
+*.state.tmp
 
 # --- Éditeurs / OS ---
 .vscode/

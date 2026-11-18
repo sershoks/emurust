@@ -88,6 +88,17 @@ pub trait Emulator {
         Ok(())
     }
 
+    /// Sauvegarde instantanée : une photo complète de la machine, ou `None`
+    /// si aucun jeu n'est chargé ou si l'émulateur ne sait pas le faire.
+    fn save_state(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Recharge une sauvegarde instantanée produite par [`Emulator::save_state`].
+    fn load_state(&mut self, _data: &[u8]) -> Result<(), EmuError> {
+        Err(EmuError::Unsupported("sauvegardes instantanées".into()))
+    }
+
     /// Fréquence d'échantillonnage voulue pour le son, en Hz.
     fn set_sample_rate(&mut self, _rate: u32) {}
 
