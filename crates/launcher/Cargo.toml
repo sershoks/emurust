@@ -12,6 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 cpal = "0.18"
+eframe = "0.37"
 emu-core.workspace = true
 gb-core.workspace = true
-minifb = "0.29"

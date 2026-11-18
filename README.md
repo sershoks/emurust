@@ -4,7 +4,7 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
 
 ## Feuille de route
 
-- [ ] Launcher (fenêtre de jeu en place, menu à venir)
+- [x] Launcher : bibliothèque par console, dossier `roms`, jeu intégré à la fenêtre
 - [ ] Game Boy (DMG)
   - [x] CPU SM83 (tous les opcodes, timing au cycle près)
   - [x] Bus mémoire, timer, port série
@@ -37,11 +37,28 @@ crates/
 ## Compiler et lancer
 
 ```
-cargo run --release -- chemin/vers/jeu.gb
-cargo test
+cargo run --release
 ```
 
-Touches : flèches = croix, X = A, Z = B, Entrée = Start, Retour arrière = Select, Échap = quitter.
+Au premier lancement, le launcher crée un dossier `roms` avec un sous-dossier par console :
+
+```
+roms/
+  gb/      vos jeux Game Boy (.gb)
+```
+
+Placez-y vos propres ROMs, cliquez sur **Actualiser**, puis sur un jeu pour le lancer.
+Les sauvegardes (`.sav`) sont écrites à côté de chaque ROM.
+
+Options :
+
+```
+emurust jeu.gb          lance directement un jeu
+emurust --roms <dir>    utilise un autre dossier de ROMs
+```
+
+Touches : flèches = croix, X = A, Z = B, Entrée = Start, Retour arrière = Select,
+Échap = retour à la bibliothèque.
 
 ## Tester le CPU avec une ROM de test
 
