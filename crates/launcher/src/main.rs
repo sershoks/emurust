@@ -13,11 +13,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod art;
 mod audio;
 mod game;
 mod library;
+mod preview;
 mod save;
 mod systems;
+mod theme;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -54,15 +57,21 @@ fn main() -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("emurust")
-            .with_inner_size([960.0, 720.0])
-            .with_min_inner_size([480.0, 360.0]),
+            .with_inner_size([1280.0, 760.0])
+            .with_min_inner_size([800.0, 520.0]),
         ..Default::default()
     };
 
     let result = eframe::run_native(
         "emurust",
         options,
-        Box::new(move |_cc| Ok(Box::new(app::EmurustApp::new(roms_dir, start_game)))),
+        Box::new(move |cc| {
+            Ok(Box::new(app::EmurustApp::new(
+                &cc.egui_ctx,
+                roms_dir,
+                start_game,
+            )))
+        }),
     );
     match result {
         Ok(()) => ExitCode::SUCCESS,

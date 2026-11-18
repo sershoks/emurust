@@ -8,6 +8,7 @@ use emu_core::{Button, Emulator};
 use crate::audio::AudioOutput;
 use crate::save::SaveFile;
 use crate::systems::System;
+use crate::theme;
 
 /// Touches du clavier → boutons de la console.
 pub const KEYMAP: [(Key, Button); 8] = [
@@ -62,8 +63,15 @@ impl GameSession {
         })
     }
 
-    /// Fait avancer le jeu au bon rythme, puis le dessine.
-    pub fn ui(&mut self, ui: &mut egui::Ui, audio: Option<&AudioOutput>) {
+    /// Fait avancer le jeu au bon rythme, puis le dessine dans `area`.
+    /// Avec `crt`, l'image reçoit des scanlines façon écran cathodique.
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        area: egui::Rect,
+        audio: Option<&AudioOutput>,
+        crt: bool,
+    ) {
         for (key, button) in KEYMAP {
             let down = ui.input(|i| i.key_down(key));
             self.emu.set_button(button, down);
@@ -96,7 +104,7 @@ impl GameSession {
             self.upload_frame(ui.ctx());
         }
 
-        self.draw(ui);
+        self.draw(ui, area, crt);
         ui.ctx().request_repaint();
     }
 
@@ -129,11 +137,10 @@ impl GameSession {
     }
 
     /// Affiche l'écran au plus grand facteur entier qui rentre, centré sur fond noir.
-    fn draw(&self, ui: &mut egui::Ui) {
+    fn draw(&self, ui: &mut egui::Ui, rect: egui::Rect, crt: bool) {
         let Some(texture) = &self.texture else {
             return;
         };
-        let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
 
         let screen = texture.size_vec2();
@@ -144,6 +151,10 @@ impl GameSession {
             target,
             egui::Image::from_texture(texture).fit_to_exact_size(target.size()),
         );
+        if crt && scale >= 2.0 {
+            // Une ligne sombre sous chaque ligne de pixels de la console.
+            theme::scanlines(ui.painter(), target, scale, 0.35);
+        }
     }
 
     /// Écrit la sauvegarde (appelé en quittant la partie).

@@ -4,7 +4,7 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
 
 ## Feuille de route
 
-- [x] Launcher : bibliothèque par console, dossier `roms`, jeu intégré à la fenêtre
+- [x] Launcher néon rétro : carrousel des consoles, liste des jeux avec fiche et aperçu en direct, effet CRT, navigation au clavier
 - [ ] Game Boy (DMG)
   - [x] CPU SM83 (tous les opcodes, timing au cycle près)
   - [x] Bus mémoire, timer, port série
@@ -57,8 +57,12 @@ emurust jeu.gb          lance directement un jeu
 emurust --roms <dir>    utilise un autre dossier de ROMs
 ```
 
-Touches : flèches = croix, X = A, Z = B, Entrée = Start, Retour arrière = Select,
-Échap = retour à la bibliothèque.
+Dans le launcher : flèches pour choisir, Entrée pour valider, Échap pour revenir,
+une lettre pour sauter aux jeux qui commencent par elle, F5 pour actualiser,
+F3 pour ouvrir le dossier des ROMs, F2 pour l'effet écran cathodique.
+
+En jeu : flèches = croix, X = A, Z = B, Entrée = Start, Retour arrière = Select,
+Échap = retour à la liste des jeux.
 
 ## Tester le CPU avec une ROM de test
 
