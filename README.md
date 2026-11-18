@@ -13,3 +13,8 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
 Ce projet ne contient et ne distribuera **aucune** ROM, BIOS, boot ROM ou autre
 contenu protégé par le droit d'auteur. Tout le code est écrit à partir de zéro.
 Pour tester, utilisez des ROMs homebrew libres ou des ROMs de test open source.
+
+## Licence
+
+emurust est distribué sous licence **GNU GPL v3.0**. Voir le fichier [LICENSE](LICENSE).
+Toute version modifiée ou redistribuée doit rester open source sous la même licence.
