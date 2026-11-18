@@ -13,19 +13,16 @@
 
 use crate::cartridge::Cartridge;
 use crate::cpu::Bus;
+use crate::ppu::Ppu;
 
 pub const INT_VBLANK: u8 = 0x01;
+pub const INT_STAT: u8 = 0x02;
 pub const INT_TIMER: u8 = 0x04;
 pub const INT_SERIAL: u8 = 0x08;
 
-const CYCLES_PER_LINE: u16 = 456;
-const LINES_PER_FRAME: u8 = 154;
-
 pub struct GbBus {
     pub cartridge: Cartridge,
-    vram: Box<[u8; 0x2000]>,
     wram: Box<[u8; 0x2000]>,
-    oam: [u8; 0xA0],
     hram: [u8; 0x7F],
     /// Registres matériels pas encore émulés : simplement mémorisés.
     io: [u8; 0x80],
@@ -38,9 +35,7 @@ pub struct GbBus {
     tma: u8,
     tac: u8,
 
-    // Ligne d'écran courante (en attendant le vrai PPU).
-    ly: u8,
-    line_cycles: u16,
+    pub ppu: Ppu,
 
     /// Boutons appuyés, un bit par bouton (voir `GameBoy::button_bit`).
     pub buttons: u8,
@@ -53,13 +48,9 @@ impl GbBus {
         let mut io = [0u8; 0x80];
         // Valeurs laissées par la boot ROM.
         io[0x00] = 0x30; // JOYP : aucune sélection
-        io[0x40] = 0x91; // LCDC : écran allumé
-        io[0x47] = 0xFC; // BGP
         GbBus {
             cartridge,
-            vram: Box::new([0; 0x2000]),
             wram: Box::new([0; 0x2000]),
-            oam: [0; 0xA0],
             hram: [0; 0x7F],
             io,
             ie: 0,
@@ -68,8 +59,7 @@ impl GbBus {
             tima: 0,
             tma: 0,
             tac: 0,
-            ly: 0,
-            line_cycles: 0,
+            ppu: Ppu::new(),
             buttons: 0,
             serial_output: Vec::new(),
         }
@@ -99,14 +89,14 @@ impl GbBus {
         }
     }
 
-    fn tick_lines(&mut self) {
-        self.line_cycles += 4;
-        if self.line_cycles >= CYCLES_PER_LINE {
-            self.line_cycles -= CYCLES_PER_LINE;
-            self.ly = (self.ly + 1) % LINES_PER_FRAME;
-            if self.ly == 144 {
-                self.request_interrupt(INT_VBLANK);
-            }
+    /// Copie 160 octets depuis `XX00` vers l'OAM (les sprites).
+    /// Sur la vraie console la copie dure 160 M-cycles ; ici elle est instantanée.
+    fn oam_dma(&mut self, page: u8) {
+        self.io[0x46] = page;
+        let src = (page as u16) << 8;
+        for i in 0..0xA0u16 {
+            let byte = self.read(src + i);
+            self.ppu.oam[i as usize] = byte;
         }
     }
 
@@ -130,7 +120,7 @@ impl GbBus {
             0xFF06 => self.tma,
             0xFF07 => self.tac | 0xF8,
             0xFF0F => self.if_ | 0xE0,
-            0xFF44 => self.ly,
+            0xFF40..=0xFF45 | 0xFF47..=0xFF4B => self.ppu.read_reg(addr),
             _ => self.io[(addr - 0xFF00) as usize],
         }
     }
@@ -150,7 +140,8 @@ impl GbBus {
             0xFF06 => self.tma = value,
             0xFF07 => self.tac = value & 0x07,
             0xFF0F => self.if_ = value & 0x1F,
-            0xFF44 => {}
+            0xFF46 => self.oam_dma(value),
+            0xFF40..=0xFF45 | 0xFF47..=0xFF4B => self.ppu.write_reg(addr, value),
             _ => self.io[(addr - 0xFF00) as usize] = value,
         }
     }
@@ -160,10 +151,10 @@ impl Bus for GbBus {
     fn read(&mut self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.cartridge.read_rom(addr),
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize],
+            0x8000..=0x9FFF => self.ppu.vram[(addr - 0x8000) as usize],
             0xA000..=0xBFFF => self.cartridge.read_ram(addr),
             0xC000..=0xFDFF => self.wram[(addr as usize - 0xC000) & 0x1FFF],
-            0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
+            0xFE00..=0xFE9F => self.ppu.oam[(addr - 0xFE00) as usize],
             0xFEA0..=0xFEFF => 0xFF,
             0xFF00..=0xFF7F => self.read_io(addr),
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
@@ -174,10 +165,10 @@ impl Bus for GbBus {
     fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x7FFF => self.cartridge.write_rom(addr, value),
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize] = value,
+            0x8000..=0x9FFF => self.ppu.vram[(addr - 0x8000) as usize] = value,
             0xA000..=0xBFFF => self.cartridge.write_ram(addr, value),
             0xC000..=0xFDFF => self.wram[(addr as usize - 0xC000) & 0x1FFF] = value,
-            0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
+            0xFE00..=0xFE9F => self.ppu.oam[(addr - 0xFE00) as usize] = value,
             0xFEA0..=0xFEFF => {}
             0xFF00..=0xFF7F => self.write_io(addr, value),
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
@@ -187,7 +178,8 @@ impl Bus for GbBus {
 
     fn tick(&mut self) {
         self.tick_timer();
-        self.tick_lines();
+        let irq = self.ppu.tick();
+        self.request_interrupt(irq);
     }
 }
 
@@ -225,6 +217,17 @@ mod tests {
         }
         assert_eq!(bus.read(0xFF05), 0x80);
         assert_eq!(bus.read(0xFF0F) & INT_TIMER, INT_TIMER);
+    }
+
+    #[test]
+    fn oam_dma_copies_to_sprites() {
+        let mut bus = bus();
+        for i in 0..0xA0u16 {
+            bus.write(0xC100 + i, i as u8);
+        }
+        bus.write(0xFF46, 0xC1);
+        assert_eq!(bus.read(0xFE00), 0x00);
+        assert_eq!(bus.read(0xFE9F), 0x9F);
     }
 
     #[test]

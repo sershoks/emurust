@@ -1,11 +1,12 @@
 //! Cœur d'émulation Game Boy (DMG).
 //!
-//! État actuel : CPU complet, bus mémoire, MBC1, timer et port série.
-//! L'écran (PPU) et le son viendront ensuite.
+//! État actuel : CPU complet, bus mémoire, MBC1, timer, port série et écran (PPU).
+//! Le son viendra ensuite.
 
 pub mod bus;
 pub mod cartridge;
 pub mod cpu;
+pub mod ppu;
 
 use bus::GbBus;
 use cartridge::{Cartridge, Mbc};
@@ -18,8 +19,7 @@ pub const SCREEN_HEIGHT: u32 = 144;
 /// T-cycles par image : 154 lignes de 456 cycles.
 pub const CYCLES_PER_FRAME: u64 = 70_224;
 
-/// Palette verte de 4 teintes, du plus clair au plus foncé (format 0x00RRGGBB).
-pub const DMG_PALETTE: [u32; 4] = [0x00E0_F8D0, 0x0088_C070, 0x0034_6856, 0x0008_1820];
+pub use ppu::DMG_PALETTE;
 
 const INFO: SystemInfo = SystemInfo {
     id: "gb",
@@ -125,7 +125,10 @@ impl Emulator for GameBoy {
     }
 
     fn framebuffer(&self) -> &[u32] {
-        &self.framebuffer
+        match &self.bus {
+            Some(bus) => bus.ppu.frame(),
+            None => &self.framebuffer,
+        }
     }
 
     fn set_button(&mut self, button: Button, pressed: bool) {

@@ -4,11 +4,11 @@ Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher u
 
 ## Feuille de route
 
-- [ ] Launcher (version ligne de commande en place)
+- [ ] Launcher (fenêtre de jeu en place, menu à venir)
 - [ ] Game Boy (DMG)
   - [x] CPU SM83 (tous les opcodes, timing au cycle près)
   - [x] Bus mémoire, MBC1, timer, port série
-  - [ ] PPU (écran)
+  - [x] PPU (fond, fenêtre, sprites, interruptions STAT)
   - [ ] Son (APU)
   - [ ] MBC3 / MBC5
 - [ ] ... (les suivants viendront un par un)
@@ -36,9 +36,11 @@ crates/
 ## Compiler et lancer
 
 ```
-cargo run
+cargo run --release -- chemin/vers/jeu.gb
 cargo test
 ```
+
+Touches : flèches = croix, X = A, Z = B, Entrée = Start, Retour arrière = Select, Échap = quitter.
 
 ## Tester le CPU avec une ROM de test
 

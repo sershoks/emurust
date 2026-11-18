@@ -1,14 +1,14 @@
 //! Launcher d'emurust.
 //!
-//! Pour l'instant en ligne de commande : il liste les systèmes disponibles
-//! ou ouvre une ROM et affiche les informations de sa cartouche.
-//! L'interface graphique viendra quand le premier cœur affichera des images.
+//! Sans argument, il liste les systèmes disponibles.
+//! Avec un fichier ROM, il choisit l'émulateur et ouvre une fenêtre de jeu.
 
 use std::path::Path;
 use std::process::ExitCode;
 
-use emu_core::{Emulator, SystemInfo};
+use emu_core::{Button, Emulator, SystemInfo};
 use gb_core::GameBoy;
+use minifb::{Key, Scale, Window, WindowOptions};
 
 /// Tous les émulateurs connus du launcher.
 fn emulators() -> Vec<Box<dyn Emulator>> {
@@ -67,8 +67,58 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let title = format!(
+        "emurust - {} - {}",
+        emu.info().name,
+        path.file_stem().unwrap_or_default().to_string_lossy()
+    );
+    match run_window(emu.as_mut(), &title) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Erreur de fenêtre : {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Touches du clavier → boutons de la console.
+const KEYMAP: [(Key, Button); 8] = [
+    (Key::Up, Button::Up),
+    (Key::Down, Button::Down),
+    (Key::Left, Button::Left),
+    (Key::Right, Button::Right),
+    (Key::X, Button::A),
+    (Key::Z, Button::B),
+    (Key::Enter, Button::Start),
+    (Key::Backspace, Button::Select),
+];
+
+fn run_window(emu: &mut dyn Emulator, title: &str) -> Result<(), minifb::Error> {
     let info = emu.info();
-    println!("[{}] ROM chargée : {}", info.name, path.display());
-    println!("Le cœur ne sait pas encore exécuter de code : c'est la prochaine étape.");
-    ExitCode::SUCCESS
+    let (width, height) = (info.screen_width as usize, info.screen_height as usize);
+
+    let mut window = Window::new(
+        title,
+        width,
+        height,
+        WindowOptions {
+            scale: Scale::X4,
+            resize: true,
+            ..WindowOptions::default()
+        },
+    )?;
+    window.set_target_fps(info.frame_rate.round() as usize);
+
+    println!(
+        "Flèches : croix | X : A | Z : B | Entrée : Start | Retour arrière : Select | Échap : quitter"
+    );
+
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        for (key, button) in KEYMAP {
+            emu.set_button(button, window.is_key_down(key));
+        }
+        emu.run_frame();
+        window.update_with_buffer(emu.framebuffer(), width, height)?;
+    }
+    Ok(())
 }
