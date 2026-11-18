@@ -1,0 +1,15 @@
+# emurust
+
+Suite d'émulateurs open source écrite entièrement en Rust, avec un launcher unique.
+
+## Feuille de route
+
+- [ ] Launcher
+- [ ] Game Boy (DMG)
+- [ ] ... (les suivants viendront un par un)
+
+## Légal
+
+Ce projet ne contient et ne distribuera **aucune** ROM, BIOS, boot ROM ou autre
+contenu protégé par le droit d'auteur. Tout le code est écrit à partir de zéro.
+Pour tester, utilisez des ROMs homebrew libres ou des ROMs de test open source.

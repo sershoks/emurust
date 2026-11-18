@@ -1,0 +1,35 @@
+# --- Rust ---
+/target/
+**/*.rs.bk
+*.pdb
+
+# --- Jamais de ROMs, BIOS ou boot ROMs dans le dépôt ---
+*.gb
+*.gbc
+*.sgb
+*.gba
+*.nes
+*.sfc
+*.smc
+*.n64
+*.z64
+*.v64
+*.nds
+*.iso
+*.bin
+*.rom
+*.zip
+*.7z
+roms/
+bios/
+
+# --- Sauvegardes de jeux / états ---
+*.sav
+*.srm
+*.state
+
+# --- Éditeurs / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
