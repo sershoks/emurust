@@ -1,0 +1,10 @@
+[package]
+name = "gb-core"
+description = "Cœur d'émulation Game Boy (DMG) d'emurust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+emu-core.workspace = true

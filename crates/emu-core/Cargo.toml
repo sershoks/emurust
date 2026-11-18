@@ -1,0 +1,9 @@
+[package]
+name = "emu-core"
+description = "Traits et types communs à tous les émulateurs d'emurust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

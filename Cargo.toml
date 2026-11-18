@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/emu-core",
+    "crates/gb-core",
+    "crates/launcher",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/sershoks/emurust"
+
+[workspace.dependencies]
+emu-core = { path = "crates/emu-core" }
+gb-core = { path = "crates/gb-core" }
+
+[profile.dev]
+# Les émulateurs sont très lents sans optimisation : on optimise même en debug.
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
