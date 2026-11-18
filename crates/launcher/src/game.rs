@@ -65,15 +65,17 @@ impl GameSession {
 
     /// Fait avancer le jeu au bon rythme, puis le dessine dans `area`.
     /// Avec `crt`, l'image reçoit des scanlines façon écran cathodique.
+    /// `pad` liste les boutons maintenus sur les manettes.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         area: egui::Rect,
         audio: Option<&AudioOutput>,
         crt: bool,
+        pad: &[Button],
     ) {
         for (key, button) in KEYMAP {
-            let down = ui.input(|i| i.key_down(key));
+            let down = ui.input(|i| i.key_down(key)) || pad.contains(&button);
             self.emu.set_button(button, down);
         }
 

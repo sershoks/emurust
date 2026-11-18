@@ -11,6 +11,7 @@ use eframe::egui::{self, Align2, Color32, Event, Id, Key, Pos2, Rect, Sense, Vec
 use crate::art;
 use crate::audio::AudioOutput;
 use crate::game::GameSession;
+use crate::gamepad::{Gamepads, PadFrame};
 use crate::library::Library;
 use crate::preview::{Preview, Previews};
 use crate::systems::{self, System};
@@ -45,6 +46,9 @@ pub struct EmurustApp {
     crt: bool,
     toast: Option<(String, f64)>,
     window_title: String,
+    gamepads: Gamepads,
+    /// État des manettes pour l'image en cours.
+    pad: PadFrame,
 }
 
 impl EmurustApp {
@@ -67,6 +71,8 @@ impl EmurustApp {
             crt: true,
             toast: None,
             window_title: String::new(),
+            gamepads: Gamepads::new(),
+            pad: PadFrame::default(),
         };
         if app.audio.is_none() {
             app.notify(
@@ -216,13 +222,13 @@ impl EmurustApp {
 
     fn systems_ui(&mut self, ui: &mut egui::Ui, body: Rect, time: f64) {
         let count = self.systems.len();
-        if ui.input(|i| i.key_pressed(Key::ArrowLeft)) {
+        if ui.input(|i| i.key_pressed(Key::ArrowLeft)) || self.pad.nav.left {
             self.system_index = self.system_index.saturating_sub(1);
         }
-        if ui.input(|i| i.key_pressed(Key::ArrowRight)) {
+        if ui.input(|i| i.key_pressed(Key::ArrowRight)) || self.pad.nav.right {
             self.system_index = (self.system_index + 1).min(count - 1);
         }
-        let mut open = ui.input(|i| i.key_pressed(Key::Enter));
+        let mut open = ui.input(|i| i.key_pressed(Key::Enter)) || self.pad.nav.confirm;
 
         let anim =
             ui.ctx()
@@ -357,7 +363,9 @@ impl EmurustApp {
         let visible = ((rows_rect.height() / ROW_HEIGHT).floor() as usize).max(1);
 
         // --- Clavier et molette ---
-        if ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Backspace)) {
+        if ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Backspace))
+            || self.pad.nav.back
+        {
             self.screen = Screen::Systems;
             return;
         }
@@ -373,6 +381,9 @@ impl EmurustApp {
                     i.key_pressed(Key::End),
                 )
             });
+            let nav = self.pad.nav;
+            let (up, down) = (up || nav.up, down || nav.down);
+            let (page_up, page_down) = (page_up || nav.page_up, page_down || nav.page_down);
             if up {
                 selected = selected.saturating_sub(1);
             }
@@ -450,7 +461,8 @@ impl EmurustApp {
             accent,
         );
 
-        let mut launch = ui.input(|i| i.key_pressed(Key::Enter)) && count > 0;
+        let mut launch =
+            (ui.input(|i| i.key_pressed(Key::Enter)) || self.pad.nav.confirm) && count > 0;
 
         if count == 0 {
             self.empty_library(&painter, list_rect, detail_rect);
@@ -744,7 +756,7 @@ impl EmurustApp {
     // ------------------------------------------------------------------
 
     fn playing_ui(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
+        if ui.input(|i| i.key_pressed(Key::Escape)) || self.pad.exit_game {
             self.stop_game();
             return;
         }
@@ -755,7 +767,7 @@ impl EmurustApp {
         let area = Rect::from_min_max(rect.min, Pos2::new(rect.right(), footer.top()));
         let audio = self.audio.as_ref();
         if let Some(session) = self.session.as_mut() {
-            session.ui(ui, area, audio, self.crt);
+            session.ui(ui, area, audio, self.crt, &self.pad.held);
         }
 
         let painter = ui.painter();
@@ -763,15 +775,23 @@ impl EmurustApp {
         theme::footer(
             painter,
             footer,
-            &[
-                ("ÉCHAP", "Bibliothèque"),
-                ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
-                ("FLÈCHES", "Croix"),
-                ("X", "A"),
-                ("Z", "B"),
-                ("ENTRÉE", "Start"),
-                ("RETOUR", "Select"),
-            ],
+            &if self.pad.connected {
+                vec![
+                    ("SELECT + START", "Bibliothèque"),
+                    ("ÉCHAP", "Bibliothèque"),
+                    ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
+                ]
+            } else {
+                vec![
+                    ("ÉCHAP", "Bibliothèque"),
+                    ("F2", if self.crt { "CRT : oui" } else { "CRT : non" }),
+                    ("FLÈCHES", "Croix"),
+                    ("X", "A"),
+                    ("Z", "B"),
+                    ("ENTRÉE", "Start"),
+                    ("RETOUR", "Select"),
+                ]
+            },
         );
     }
 }
@@ -786,6 +806,11 @@ impl eframe::App for EmurustApp {
         self.previews.poll(&ctx);
         let rect = ui.max_rect();
         let now = ui.input(|i| i.time);
+
+        self.pad = self.gamepads.poll(now);
+        for message in self.gamepads.take_messages() {
+            self.notify(message, now);
+        }
 
         if self.screen == Screen::Playing && self.session.is_some() {
             self.playing_ui(ui, rect);
@@ -814,13 +839,23 @@ impl eframe::App for EmurustApp {
                     theme::footer(
                         &painter,
                         footer,
-                        &[
-                            ("◀ ▶", "Choisir"),
-                            ("ENTRÉE", "Ouvrir"),
-                            ("F5", "Actualiser"),
-                            ("F3", "Dossier ROMs"),
-                            ("F2", "Effet CRT"),
-                        ],
+                        &if self.pad.connected {
+                            vec![
+                                ("◀ ▶", "Choisir"),
+                                ("A", "Ouvrir"),
+                                ("F5", "Actualiser"),
+                                ("F3", "Dossier ROMs"),
+                                ("F2", "Effet CRT"),
+                            ]
+                        } else {
+                            vec![
+                                ("◀ ▶", "Choisir"),
+                                ("ENTRÉE", "Ouvrir"),
+                                ("F5", "Actualiser"),
+                                ("F3", "Dossier ROMs"),
+                                ("F2", "Effet CRT"),
+                            ]
+                        },
                     );
                 }
                 _ => {
@@ -828,14 +863,25 @@ impl eframe::App for EmurustApp {
                     theme::footer(
                         &painter,
                         footer,
-                        &[
-                            ("▲ ▼", "Choisir"),
-                            ("ENTRÉE", "Jouer"),
-                            ("ÉCHAP", "Consoles"),
-                            ("A-Z", "Aller à"),
-                            ("F5", "Actualiser"),
-                            ("F3", "Dossier ROMs"),
-                        ],
+                        &if self.pad.connected {
+                            vec![
+                                ("▲ ▼", "Choisir"),
+                                ("A", "Jouer"),
+                                ("B", "Consoles"),
+                                ("LB RB", "Page"),
+                                ("F5", "Actualiser"),
+                                ("F3", "Dossier ROMs"),
+                            ]
+                        } else {
+                            vec![
+                                ("▲ ▼", "Choisir"),
+                                ("ENTRÉE", "Jouer"),
+                                ("ÉCHAP", "Consoles"),
+                                ("A-Z", "Aller à"),
+                                ("F5", "Actualiser"),
+                                ("F3", "Dossier ROMs"),
+                            ]
+                        },
                     );
                 }
             }

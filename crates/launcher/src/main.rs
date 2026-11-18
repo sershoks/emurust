@@ -16,6 +16,7 @@ mod app;
 mod art;
 mod audio;
 mod game;
+mod gamepad;
 mod library;
 mod preview;
 mod save;
